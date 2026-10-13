@@ -51,6 +51,17 @@ impl Commentary {
         }
     }
 
+    /// Opening line during the pre-match presentation.
+    pub fn welcome(&mut self, home: &str, away: &str) {
+        let pick = |xs: &[&str]| xs[gen_range(0, xs.len())].to_string();
+        let l = pick(&[
+            "Good afternoon and welcome. {h} against {a}, and the atmosphere here is something else.",
+            "Welcome along. {h} take on {a}, and the snacks in the stands are already running low.",
+            "Hello and welcome to {h} versus {a}. Grab your chai, this one should be good.",
+        ]);
+        self.say(&l.replace("{h}", home).replace("{a}", away), false, true);
+    }
+
     fn say(&mut self, text: &str, colour: bool, urgent: bool) {
         self.line = text.to_string();
         self.shown_for = 0.0;

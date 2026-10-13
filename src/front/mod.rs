@@ -9,6 +9,7 @@ pub mod controls;
 pub mod font5x7;
 pub mod hud;
 pub mod humanoid;
+pub mod intro;
 pub mod menu;
 pub mod players;
 pub mod stadium;
@@ -205,11 +206,12 @@ impl Plugin for GamePlugin {
             .add_systems(Update, (career::hub_input, career::draw_hub).chain().run_if(in_state(AppState::Hub)))
             .add_systems(Update, crowd_volume.run_if(in_state(AppState::Match)))
             .add_plugins(stadium::StadiumPlugin)
-            .add_systems(OnEnter(AppState::Match), setup_match)
+            .add_systems(OnEnter(AppState::Match), (setup_match, intro::spawn_intro).chain())
             .add_systems(OnExit(AppState::Match), teardown_match)
             .add_systems(
                 Update,
                 (
+                    intro::tick_intro,
                     step_match,
                     celebrate::celebrations,
                     players::redress_substitutes,
@@ -319,7 +321,12 @@ fn step_match(
     mut talk: ResMut<commentary::Commentary>,
     mut career: Option<ResMut<career::Career>>,
     mut next: ResMut<NextState<AppState>>,
+    intro: Option<Res<intro::Intro>>,
 ) {
+    // The pre-match presentation holds the match until it ends or is skipped.
+    if intro.is_some_and(|i| i.active) {
+        return;
+    }
     let dt = time.delta_secs().min(1.0 / 30.0);
     talk.tick(dt);
     let pad_list: Vec<&Gamepad> = pads.iter().collect();

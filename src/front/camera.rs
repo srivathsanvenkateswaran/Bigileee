@@ -96,11 +96,14 @@ pub fn update_camera(
     m: Option<Res<super::MatchRes>>,
     time: Res<Time>,
     mut q: Query<(&mut MainCam, &mut Transform, &mut Projection)>,
+    intro: Option<Res<super::intro::Intro>>,
 ) {
     let Ok((mut cam, mut tf, mut proj)) = q.single_mut() else { return };
     let dt = time.delta_secs();
     let ball = view.ball.pos + view.ball.vel * 0.3;
-    let (focus, eye, fov): (Vec3, Vec3, f32) = if view.replay {
+    let (focus, eye, fov): (Vec3, Vec3, f32) = if let Some((e, f, v)) = intro.as_ref().filter(|i| i.active).map(|i| super::intro::intro_camera(i.t)) {
+        (f, e, v)
+    } else if view.replay {
         let side = view.ball.pos.x.signum();
         let focus = sim_to_world(view.ball.pos, view.ball.z * 0.5);
         let eye = Vec3::new(side * (HALF_L - 14.0), 3.5, view.ball.pos.y * 0.5 + 16.0);
