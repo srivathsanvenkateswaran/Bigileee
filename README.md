@@ -1,14 +1,9 @@
-# KaalPanthu
+# Bigileee 22
 
-An 11-a-side football game for macOS, written in Rust with
-[macroquad](https://github.com/not-fl3/macroquad). Top-down camera, a
-4-4-2 for both sides, and all the restarts: kick-offs, throw-ins, goal kicks,
-corners, free kicks and penalties.
-
-The clubs are parodies named after real cities (Manchester Town, Madrasin FC,
-Kolkata Baddies and so on). Their crests are original geometric designs in the
-club colours, and the players are generated fictional names. Nothing here is
-affiliated with any real club, league or game publisher.
+A parody football game for macOS in the spirit of FIFA 22, written in Rust on
+[Bevy](https://bevyengine.org). 3D stadium, broadcast camera, 11 leagues and
+209 clubs with pun-named players. It's a meme game and isn't affiliated with
+EA, FIFA or any club or league.
 
 ## Run
 
@@ -16,45 +11,65 @@ affiliated with any real club, league or game publisher.
 cargo run --release
 ```
 
-Requires a Rust toolchain (`rustup`). The first build downloads and compiles
-dependencies; after that it starts in a couple of seconds.
+Requires a Rust toolchain (`rustup`). The first build compiles Bevy and takes
+a few minutes.
+
+## Leagues
+
+| Real league | In game |
+| --- | --- |
+| Premier League | Spud League |
+| La Liga | Paella League |
+| Serie A | Pizza League |
+| Bundesliga | Burger League |
+| Ligue 1 | Croissant League |
+| Indian Super League | Dosa League |
+| Saudi Pro League | Camel League |
+| MLS | Obesity League |
+| Brasileirao | Samba League |
+| Eredivisie | Cheese League |
+| Primeira Liga | Pastel de Nata League |
+
+Squads are 2021-22 (2022 for MLS and Brazil). Ratings are hand estimates.
+Where a club's real squad wasn't known well enough, the game fills the gaps
+with generated players, marked `*` on the team sheet. Crests are original
+geometric designs in club colours.
 
 ## Modes
 
-- **1 Player vs CPU** with four CPU levels
-- **2 Players** on one keyboard
-- **Watch** CPU vs CPU
-
-Half length is 2, 3, 5 or 8 real minutes; the match clock runs to 90.
+Kick Off (vs CPU, five difficulty levels), 2 Players on one Mac, and CPU vs
+CPU. Half length from 2 to 10 minutes.
 
 ## Controls
 
-| Action | 1 player / P1 | P2 |
-| --- | --- | --- |
-| Move | WASD (or arrows in 1P) | Arrows |
-| Sprint | Shift | Right Shift |
-| Pass | J | , |
-| Through ball | I | ; |
-| Lob / cross | L | / |
-| Shoot (hold for power, aim with direction) | K or Space | . |
-| Tackle (defending) | K | . |
-| Slide tackle (defending) | L | / |
-| Switch player | Q, or J while defending | M, or , while defending |
-| Pause | Esc | Esc |
+Xbox and PlayStation controllers work, with a FIFA-style layout:
 
-Pressing pass or shoot just before the ball reaches you plays it first time.
-Overcharging a shot past the red zone of the power bar sends it high.
+| Action | Pad | Keyboard (1P) | Keyboard P2 |
+| --- | --- | --- | --- |
+| Move | Left stick / D-pad | WASD or arrows | Arrows |
+| Sprint | RT / R2 | Shift | Right Shift |
+| Pass | A / Cross | J | , |
+| Through ball | Y / Triangle | I | ; |
+| Lob / cross | X / Square | L | / |
+| Shoot (hold for power) | B / Circle | K or Space | . |
+| Tackle (defending) | B / Circle | K | . |
+| Slide (defending) | X / Square | L | / |
+| Jockey (hold) | LT / L2 | E | N |
+| Switch player | LB / L1 | Q | M |
+| Camera | | C | |
+| Pause | Start | Esc | |
 
-## How it works
+Pressing pass or shoot just before the ball arrives plays it first time.
+Overcharging a shot sends it over the bar. Goals get a replay; skip it with
+A or Enter.
 
-| File | What it does |
+## Code
+
+| Path | What it does |
 | --- | --- |
-| `src/game.rs` | Match state, ball physics (rolling and air drag, bounces, spin), possession, tackles and fouls, goal-line and touchline rules, restarts |
-| `src/ai.rs` | Formation shifting, pressing and marking, the ball carrier's shoot/pass/dribble choice, set-piece takers, goalkeeper positioning and dives |
-| `src/render.rs` | Pitch, stands, players, ball with height, goal frames, scorebug, minimap, crests |
-| `src/audio.rs` | Kick, whistle, crowd and post sounds, synthesised at startup (no audio files) |
-| `src/teams.rs` | Clubs, ratings and squad name generation |
-| `src/input.rs` | Keyboard bindings |
+| `src/sim/` | The match itself, independent of rendering: rules (offside, fouls, penalties, every restart), ball physics, AI, formations and squad selection |
+| `src/front/` | Bevy front end: menus, stadium, player rigs and animation, cameras, replays, HUD, controls, synthesised audio |
+| `src/data/` | Leagues, clubs and player cards |
 
 ## Tests
 
@@ -62,7 +77,8 @@ Overcharging a shot past the red zone of the power bar sends it high.
 cargo test --release -- --nocapture
 ```
 
-Plays six full CPU-vs-CPU matches headlessly and checks they finish cleanly.
+Plays six CPU-vs-CPU matches headlessly across all formations, and checks
+every club builds a valid squad.
 
-`KAALPANTHU_SNAPSHOT=/some/dir cargo run --release` saves PNGs of the menu and
-a CPU match, then quits.
+`BIGILEEE_SNAPSHOT=/some/dir cargo run --release` walks through the menus,
+plays a CPU match and saves screenshots, then quits.

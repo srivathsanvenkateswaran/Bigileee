@@ -958,7 +958,7 @@ impl Match {
         self.release_ball(i);
         match kind {
             PassKind::Ground => {
-                let v = (d * GROUND_DRAG + 4.5).clamp(8.0, 30.0);
+                let v = (d * GROUND_DRAG + 7.0).clamp(9.0, 31.0);
                 self.ball.vel = dirv * v;
                 self.ball.vz = 0.0;
             }
@@ -1311,6 +1311,8 @@ impl Match {
         self.ball.vz = 0.0;
         self.ball.spin = 0.0;
         self.players[j].hold = 0.0;
+        // Take a touch before the next decision.
+        self.players[j].think = gen_range(0.45, 1.0);
         if self.ball.vel.length() > 0.5 && self.players[j].vel.length() < 0.5 {
             self.players[j].facing = (-self.ball.vel).normalize();
         }
@@ -1539,6 +1541,7 @@ mod tests {
             let mut banners: std::collections::BTreeMap<String, u32> = Default::default();
             let mut last_banner: Option<String> = None;
             let (mut owner_x, mut owner_n) = ([0.0f32; 2], [0.0f32; 2]);
+            let (mut last_owner, mut last_owner_some, mut loose): (Option<usize>, Option<usize>, f32) = (None, None, 0.0);
             while m.phase != Phase::FullTime {
                 m.step(1.0 / 120.0, &[], &sfx);
                 sfx.drain();
@@ -1550,6 +1553,19 @@ mod tests {
                     }
                 } else {
                     last_banner = None;
+                }
+                if m.ball.owner != last_owner {
+                    if let (Some(a), Some(b)) = (last_owner_some, m.ball.owner) {
+                        let k = if m.players[a].team == m.players[b].team { "keep" } else { "turnover" };
+                        *banners.entry(k.to_string()).or_insert(0) += 1;
+                    }
+                    if m.ball.owner.is_some() {
+                        last_owner_some = m.ball.owner;
+                    }
+                    last_owner = m.ball.owner;
+                }
+                if m.ball.owner.is_none() && m.phase == Phase::Play {
+                    loose += 1.0 / 120.0;
                 }
                 if let Some(o) = m.ball.owner {
                     owner_x[m.players[o].team] += m.frame(m.players[o].team, m.ball.pos).x;
@@ -1570,6 +1586,7 @@ mod tests {
                 m.teams[0].formation, m.score[0], m.score[1], m.teams[1].formation, m.shots,
                 m.possession[0] / (m.possession[0] + m.possession[1]) * 100.0
             );
+            println!("   loose {:.0}s", loose);
             println!("   events {:?}  avg carrier x (team frame) {:.1} / {:.1}", banners, owner_x[0] / owner_n[0].max(1.0), owner_x[1] / owner_n[1].max(1.0));
             goals += m.score[0] + m.score[1];
             shots += m.shots[0] + m.shots[1];

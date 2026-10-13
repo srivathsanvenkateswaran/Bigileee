@@ -121,7 +121,10 @@ impl Match {
                 let lane = opps.clone().map(|o| dist_to_segment(o, p.pos, r.pos)).fold(f32::MAX, f32::min);
                 let space = opps.map(|o| o.distance(r.pos)).fold(f32::MAX, f32::min);
                 let mut kind = PassKind::Ground;
-                let mut s = prog * 0.07 + space.min(8.0) * 0.28 + lane.min(4.0) * 0.35 - d * 0.025;
+                let mut s = prog * 0.11 + space.min(8.0) * 0.22 + lane.min(4.0) * 0.35 - d * 0.02;
+                if prog < -3.0 {
+                    s -= 0.8;
+                }
                 if lane < 1.6 {
                     if d > 16.0 {
                         kind = PassKind::Lob;
@@ -177,8 +180,9 @@ impl Match {
                 };
                 action = Some(Action::Pass(PassKind::Lob, aim));
             } else if let Some((j, score, kind)) = self.best_pass(i, 40.0) {
-                let pressured = press < 3.2;
-                let threshold = if pressured { -1.0 } else { 2.0 + gen_range(0.0, 1.6) };
+                let pressured = press < 3.0;
+                let forward = self.frame(t, self.players[j].pos).x > pf.x + 4.0;
+                let threshold = if pressured { -1.0 } else if forward { 2.6 + gen_range(0.0, 1.4) } else { 3.6 + gen_range(0.0, 1.0) };
                 if score > threshold {
                     action = Some(Action::Pass(kind, self.players[j].pos - p.pos));
                 }
@@ -325,7 +329,7 @@ impl Match {
                 let d = self.players[c].pos.distance(p.pos);
                 if p.think <= 0.0 && p.tackle_cd <= 0.0 {
                     rethink = true;
-                    if d < 1.7 && gen_range(0.0, 1.0) < 0.25 + skill * 0.45 {
+                    if d < 1.6 && gen_range(0.0, 1.0) < 0.15 + skill * 0.35 {
                         action = Some(Action::Tackle);
                     } else if d < 2.6
                         && d > 1.2

@@ -104,8 +104,8 @@ impl Plugin for GamePlugin {
             .init_resource::<View>()
             .init_resource::<Replay>()
             .add_systems(Startup, (load_fonts, audio::build_sounds))
-            .add_systems(OnEnter(AppState::Title), mark_dirty)
-            .add_systems(OnEnter(AppState::Setup), mark_dirty)
+            .add_systems(OnEnter(AppState::Title), (mark_dirty, menu_camera::<0>))
+            .add_systems(OnEnter(AppState::Setup), (mark_dirty, menu_camera::<1>))
             .add_systems(Update, (menu::title_input, menu::draw_title).chain().run_if(in_state(AppState::Title)))
             .add_systems(Update, (menu::setup_input, menu::draw_setup).chain().run_if(in_state(AppState::Setup)))
             .add_systems(OnEnter(AppState::Match), setup_match)
@@ -127,6 +127,12 @@ impl Plugin for GamePlugin {
             app.insert_resource(Snapshot { dir, frame: 0 }).add_systems(Last, snapshot);
         }
     }
+}
+
+/// Menus are pure UI, which still needs a camera to render through.
+fn menu_camera<const S: u8>(mut commands: Commands) {
+    let state = if S == 0 { AppState::Title } else { AppState::Setup };
+    commands.spawn((Camera2d, StateScoped(state)));
 }
 
 fn mark_dirty(mut menu: ResMut<menu::MenuState>) {
