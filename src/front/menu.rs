@@ -157,11 +157,12 @@ pub fn draw_title(mut commands: Commands, fonts: Res<Fonts>, mut menu: ResMut<Me
 
 // ---------- setup ----------
 
-const ROWS: usize = 10;
+const ROWS: usize = 11;
 pub const START_ROW: usize = ROWS - 1;
 
 pub fn setup_input(
     mut commands: Commands,
+    mut time_of_day: ResMut<super::stadium::TimeOfDay>,
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     mut menu: ResMut<MenuState>,
@@ -210,6 +211,10 @@ pub fn setup_input(
             6 => settings.camera = CamMode::ALL[cycle(CamMode::ALL.iter().position(|c| *c == settings.camera).unwrap_or(0), 3)],
             7 => settings.commentary = !settings.commentary,
             8 => settings.crowd = cycle(settings.crowd, super::CROWD_LEVELS.len()),
+            9 => {
+                use super::stadium::TimeOfDay;
+                *time_of_day = if *time_of_day == TimeOfDay::Day { TimeOfDay::Night } else { TimeOfDay::Day };
+            }
             _ => {}
         }
         if menu.row <= 3 {
@@ -255,8 +260,8 @@ fn team_card(c: &mut ChildSpawnerCommands, fonts: &Fonts, images: &mut Assets<Im
             width: Val::Px(440.0),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
-            padding: UiRect::all(Val::Px(18.0)),
-            row_gap: Val::Px(6.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            row_gap: Val::Px(3.0),
             border: UiRect::top(Val::Px(5.0)),
             ..default()
         },
@@ -267,7 +272,7 @@ fn team_card(c: &mut ChildSpawnerCommands, fonts: &Fonts, images: &mut Assets<Im
         card.spawn(text(fonts, label, 16.0, Color::srgba(1.0, 1.0, 1.0, 0.6)));
         let arrow = |s: bool, v: &str| if s { format!("<  {v}  >") } else { v.to_string() };
         card.spawn(text(fonts, arrow(sel[0], league), 20.0, if sel[0] { GOLD } else { Color::srgba(1.0, 1.0, 1.0, 0.8) }));
-        card.spawn((Node { width: Val::Px(110.0), height: Val::Px(110.0), margin: UiRect::vertical(Val::Px(6.0)), ..default() }, ImageNode::new(crest)));
+        card.spawn((Node { width: Val::Px(92.0), height: Val::Px(92.0), margin: UiRect::vertical(Val::Px(4.0)), ..default() }, ImageNode::new(crest)));
         card.spawn(text(fonts, arrow(sel[1], &t.name), 28.0, if sel[1] { GOLD } else { Color::WHITE }));
         card.spawn(text(fonts, format!("{}   ·   {}", t.short, t.formation), 16.0, Color::srgba(1.0, 1.0, 1.0, 0.6)));
         card.spawn(text(fonts, stat_line(t), 18.0, Color::WHITE));
@@ -291,6 +296,7 @@ pub fn draw_setup(
     mut images: ResMut<Assets<Image>>,
     mut menu: ResMut<MenuState>,
     settings: Res<Settings>,
+    time_of_day: Res<super::stadium::TimeOfDay>,
     old: Query<Entity, With<MenuRoot>>,
 ) {
     if !menu.dirty {
@@ -309,8 +315,8 @@ pub fn draw_setup(
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                padding: UiRect::top(Val::Px(26.0)),
-                row_gap: Val::Px(12.0),
+                padding: UiRect::top(Val::Px(14.0)),
+                row_gap: Val::Px(8.0),
                 ..default()
             },
             BackgroundColor(BG),
@@ -325,7 +331,7 @@ pub fn draw_setup(
                 (_, Mode::TwoPlayer) => "2 PLAYERS",
                 (_, Mode::Watch) => "CPU vs CPU",
             };
-            c.spawn(text(&fonts, mode, 40.0, Color::WHITE));
+            c.spawn(text(&fonts, mode, 32.0, Color::WHITE));
             c.spawn(Node { column_gap: Val::Px(30.0), align_items: AlignItems::Center, ..default() }).with_children(|teams| {
                 let (hl, al) = (leagues[settings.home.0].name, leagues[settings.away.0].name);
                 if settings.flow != Flow::Friendly {
@@ -342,8 +348,17 @@ pub fn draw_setup(
                 ("Camera", settings.camera.label().to_string()),
                 ("Commentary", if settings.commentary { "On".to_string() } else { "Off".to_string() }),
                 ("Crowd", super::CROWD_LEVELS[settings.crowd].0.to_string()),
+                ("Kick-off", if *time_of_day == super::stadium::TimeOfDay::Day { "Afternoon".to_string() } else { "Floodlit night".to_string() }),
             ];
-            c.spawn(Node { column_gap: Val::Px(26.0), ..default() }).with_children(|o| {
+            c.spawn(Node {
+                column_gap: Val::Px(18.0),
+                row_gap: Val::Px(10.0),
+                flex_wrap: FlexWrap::Wrap,
+                justify_content: JustifyContent::Center,
+                max_width: Val::Px(1100.0),
+                ..default()
+            })
+            .with_children(|o| {
                 for (k, (label, value)) in opts.iter().enumerate() {
                     let sel = row == 4 + k;
                     o.spawn((

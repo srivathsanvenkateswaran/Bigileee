@@ -92,8 +92,16 @@ pub fn spawn_hud(commands: &mut Commands, fonts: &Fonts, images: &mut Assets<Ima
             .with_child((text(fonts, "00:00", 22.0, Color::WHITE), ClockText));
         });
     commands.spawn((
-        Node { position_type: PositionType::Absolute, left: Val::Px(26.0), top: Val::Px(64.0), ..default() },
-        text(fonts, "1st half", 15.0, Color::srgba(1.0, 1.0, 1.0, 0.75)),
+        // On its own dark tab under the scorebug, so it stays legible over boards and crowd.
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(24.0),
+            top: Val::Px(60.0),
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.03, 0.04, 0.08, 0.85)),
+        text(fonts, "1st half", 15.0, Color::srgba(1.0, 1.0, 1.0, 0.85)),
         HalfText,
         scoped.clone(),
     ));
