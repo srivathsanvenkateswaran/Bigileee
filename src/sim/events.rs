@@ -32,6 +32,11 @@ pub enum Call {
     Penalty,
     Sub { off: String, on: String },
     Shootout { player: String, scored: bool },
+    /// Level after 90 minutes of a knockout tie.
+    ExtraTime,
+    Injury { player: String },
+    /// A CPU side changes approach: `attacking` true when chasing the game, false when sitting on a lead.
+    Tactics { team: usize, attacking: bool },
 }
 
 /// Collects sound and commentary events during a step; the front end drains them each frame.

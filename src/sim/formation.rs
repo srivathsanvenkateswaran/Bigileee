@@ -66,3 +66,40 @@ pub fn slots(name: &str) -> [Slot; 11] {
         ],
     }
 }
+
+/// How far a team pushes up, how hard it presses and how many risks it takes on the ball.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Mentality {
+    UltraDefensive,
+    Defensive,
+    #[default]
+    Balanced,
+    Attacking,
+    UltraAttacking,
+}
+
+impl Mentality {
+    pub const ALL: [Mentality; 5] =
+        [Mentality::UltraDefensive, Mentality::Defensive, Mentality::Balanced, Mentality::Attacking, Mentality::UltraAttacking];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mentality::UltraDefensive => "Ultra Defensive",
+            Mentality::Defensive => "Defensive",
+            Mentality::Balanced => "Balanced",
+            Mentality::Attacking => "Attacking",
+            Mentality::UltraAttacking => "Ultra Attacking",
+        }
+    }
+
+    /// -1 (everyone behind the ball) to +1 (all-out attack).
+    pub fn push(self) -> f32 {
+        match self {
+            Mentality::UltraDefensive => -1.0,
+            Mentality::Defensive => -0.5,
+            Mentality::Balanced => 0.0,
+            Mentality::Attacking => 0.5,
+            Mentality::UltraAttacking => 1.0,
+        }
+    }
+}

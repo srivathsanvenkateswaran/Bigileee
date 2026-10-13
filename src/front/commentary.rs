@@ -159,6 +159,31 @@ impl Commentary {
                 let l = if *scored { pick(&["{p} scores!", "{p} sends the keeper the wrong way!"]) } else { pick(&["{p} misses!", "Saved! {p} can't believe it."]) };
                 self.say(&fill(l, player), false, true);
             }
+            Call::ExtraTime => {
+                let l = pick(&[
+                    "Ninety minutes can't separate them. Thirty more it is.",
+                    "Still level! We're going to extra time.",
+                    "Extra time, and somebody is going to need a second dinner.",
+                ]);
+                self.say(&l, false, true);
+            }
+            Call::Injury { player } => {
+                let l = pick(&[
+                    "{p} is down, and that looks painful.",
+                    "{p} is hobbling. The physio is grabbing the magic sponge.",
+                    "That's a knock for {p}. He's moving like a man who ate too much payasam.",
+                ]);
+                self.say(&fill(l, player), true, false);
+            }
+            Call::Tactics { team, attacking } => {
+                let t = team_name(*team);
+                let l = if *attacking {
+                    pick(&["{t} are throwing bodies forward now.", "The manager of {t} wants a goal. Everyone up!"])
+                } else {
+                    pick(&["{t} are shutting up shop.", "{t} drop deep to protect what they have."])
+                };
+                self.say(&l.replace("{t}", &t), true, false);
+            }
         }
     }
 }

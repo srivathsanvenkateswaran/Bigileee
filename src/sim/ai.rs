@@ -101,6 +101,7 @@ impl Match {
     pub fn best_pass(&self, i: usize, max_dist: f32) -> Option<(usize, f32, PassKind)> {
         let p = &self.players[i];
         let t = p.team;
+        let risk = self.mentality[t].push();
         let my_x = self.frame(t, p.pos).x;
         let line = {
             let mut xs: Vec<f32> = Self::team_range(1 - t).map(|j| self.frame(t, self.players[j].pos).x).collect();
@@ -121,7 +122,7 @@ impl Match {
                 let lane = opps.clone().map(|o| dist_to_segment(o, p.pos, r.pos)).fold(f32::MAX, f32::min);
                 let space = opps.map(|o| o.distance(r.pos)).fold(f32::MAX, f32::min);
                 let mut kind = PassKind::Ground;
-                let mut s = prog * 0.11 + space.min(8.0) * 0.22 + lane.min(4.0) * 0.35 - d * 0.02;
+                let mut s = prog * (0.11 + risk * 0.04) + space.min(8.0) * 0.22 + lane.min(4.0) * (0.35 - risk * 0.08) - d * 0.02;
                 if prog < -3.0 {
                     s -= 0.8;
                 }
@@ -135,7 +136,7 @@ impl Match {
                 }
                 if r.role == Role::Fwd && prog > 5.0 && space > 4.0 && lane > 2.0 && rx < line + 2.0 {
                     kind = PassKind::Through;
-                    s += 0.4;
+                    s += 0.4 + risk * 0.3;
                 }
                 if r.role == Role::Gk {
                     s -= 2.5;
@@ -149,6 +150,7 @@ impl Match {
         let p = &self.players[i];
         let t = p.team;
         let skill = self.skill[t];
+        let risk = self.mentality[t].push();
         let goal = self.opp_goal(t);
         let pf = self.frame(t, p.pos);
         let dist_goal = goal.distance(p.pos);
@@ -162,15 +164,17 @@ impl Match {
                 0.85
             } else if dist_goal < 20.0 {
                 0.5 + skill * 0.15
-            } else if dist_goal < 27.0 {
+            } else if dist_goal < 27.0 + risk * 4.0 {
                 0.12 + skill * 0.1
             } else {
                 0.0
             };
+            // Attacking sides shoot on sight; defensive ones look for the safer option.
+            let chance = (chance * (1.0 + risk * 0.3)).min(0.95);
             if angle_ok && gen_range(0.0, 1.0) < chance {
                 let power = (0.5 + dist_goal / 70.0 + gen_range(0.0, 0.15)).min(0.88);
                 action = Some(Action::Shoot(power, Vec2::ZERO));
-            } else if pf.x > 33.0 && pf.y.abs() > 17.0 && gen_range(0.0, 1.0) < 0.45 {
+            } else if pf.x > 33.0 && pf.y.abs() > 17.0 && gen_range(0.0, 1.0) < 0.45 + risk * 0.1 {
                 let box_target = Self::team_range(t)
                     .filter(|&j| j != i && self.in_box(1 - t, self.players[j].pos))
                     .max_by(|&a, &b| self.players[a].pos.x.abs().total_cmp(&self.players[b].pos.x.abs()));
@@ -182,7 +186,13 @@ impl Match {
             } else if let Some((j, score, kind)) = self.best_pass(i, 40.0) {
                 let pressured = press < 3.0;
                 let forward = self.frame(t, self.players[j].pos).x > pf.x + 4.0;
-                let threshold = if pressured { -1.0 } else if forward { 2.6 + gen_range(0.0, 1.4) } else { 3.6 + gen_range(0.0, 1.0) };
+                let threshold = if pressured {
+                    -1.0
+                } else if forward {
+                    2.6 - risk * 0.6 + gen_range(0.0, 1.4)
+                } else {
+                    3.6 + risk * 0.5 + gen_range(0.0, 1.0)
+                };
                 if score > threshold {
                     action = Some(Action::Pass(kind, self.players[j].pos - p.pos));
                 }
@@ -266,6 +276,7 @@ impl Match {
         let p = &self.players[i];
         let t = p.team;
         let skill = self.skill[t];
+        let press = self.mentality[t].push();
         let loose = self.ball.owner.is_none();
         let possession = self.possession_team();
 
@@ -318,8 +329,9 @@ impl Match {
             .unwrap_or(false);
         if chaser == Some(i) && !human_engaged {
             let target = if let Some(c) = carrier {
+                // Defensive sides stand off the carrier; attacking ones get tight.
                 let cp = self.players[c].pos;
-                cp + (self.own_goal(t) - cp).normalize() * 0.6
+                cp + (self.own_goal(t) - cp).normalize() * (0.6 + (-press).max(0.0) * 1.4)
             } else {
                 self.intercept_point(i)
             };
@@ -329,12 +341,12 @@ impl Match {
                 let d = self.players[c].pos.distance(p.pos);
                 if p.think <= 0.0 && p.tackle_cd <= 0.0 {
                     rethink = true;
-                    if d < 1.6 && gen_range(0.0, 1.0) < 0.15 + skill * 0.35 {
+                    if d < 1.6 && gen_range(0.0, 1.0) < (0.15 + skill * 0.35) * (1.0 + press * 0.35) {
                         action = Some(Action::Tackle);
                     } else if d < 2.6
                         && d > 1.2
                         && (self.players[c].pos - p.pos).normalize().dot(p.facing) > 0.85
-                        && gen_range(0.0, 1.0) < 0.05 + skill * 0.06
+                        && gen_range(0.0, 1.0) < (0.05 + skill * 0.06) * (1.0 + press * 0.5)
                     {
                         action = Some(Action::Slide);
                     }
@@ -342,9 +354,11 @@ impl Match {
             }
             return Intent { vel: self.seek(i, target, true), sprint: true, action, rethink };
         }
-        if carrier.is_some() && self.second_chaser(t, chaser) == Some(i) {
+        // The second man presses unless the side is parked deep and the ball is still far away.
+        let deep_ball = self.frame(t, self.ball.pos).x < 0.0;
+        if carrier.is_some() && (press > -0.75 || deep_ball) && self.second_chaser(t, chaser) == Some(i) {
             let b = self.ball.pos;
-            let target = b + (self.own_goal(t) - b).normalize() * 5.0;
+            let target = b + (self.own_goal(t) - b).normalize() * (5.0 - press * 2.5);
             return Intent { vel: self.seek(i, target, true), sprint: true, action: None, rethink: false };
         }
 

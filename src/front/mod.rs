@@ -17,6 +17,7 @@ pub mod view;
 
 use crate::data;
 use crate::sim::events::Sfx;
+use crate::sim::formation::{self, Mentality};
 use crate::sim::game::{Match, MatchConfig, Mode, Phase};
 use crate::sim::squad::TeamSetup;
 use bevy::audio::Volume;
@@ -106,6 +107,7 @@ pub struct MatchRes {
     pub paused: bool,
     pub pause_sel: usize,
     pub subs: Option<SubsUi>,
+    pub tactics: Option<TacticsUi>,
 }
 
 /// Substitutions screen state (opened from the pause menu).
@@ -119,7 +121,25 @@ pub struct SubsUi {
     pub out: Option<usize>,
 }
 
-pub const PAUSE_ITEMS: [&str; 5] = ["Resume", "Substitutions", "Commentary", "Restart match", "Quit to menu"];
+/// Tactics screen state (opened from the pause menu). Changes are staged until applied.
+#[derive(Clone, Copy)]
+pub struct TacticsUi {
+    pub team: usize,
+    /// 0 = formation, 1 = mentality, 2 = apply.
+    pub row: usize,
+    /// Index into `formation::NAMES`.
+    pub formation: usize,
+    pub mentality: Mentality,
+}
+
+impl TacticsUi {
+    fn open(m: &Match, team: usize) -> TacticsUi {
+        let formation = formation::NAMES.iter().position(|f| *f == m.teams[team].formation).unwrap_or(0);
+        TacticsUi { team, row: 0, formation, mentality: m.mentality[team] }
+    }
+}
+
+pub const PAUSE_ITEMS: [&str; 6] = ["Resume", "Substitutions", "Tactics", "Commentary", "Restart match", "Quit to menu"];
 
 #[derive(Resource)]
 pub struct Fonts {
@@ -150,7 +170,10 @@ impl Plugin for GamePlugin {
             .add_systems(Update, (menu::title_input, menu::draw_title).chain().run_if(in_state(AppState::Title)))
             .add_systems(Update, (menu::setup_input, menu::draw_setup).chain().run_if(in_state(AppState::Setup)))
             .init_resource::<career::HubState>()
-            .add_systems(OnEnter(AppState::Hub), (menu_camera::<2>, |mut h: ResMut<career::HubState>| h.dirty = true))
+            .add_systems(OnEnter(AppState::Hub), (menu_camera::<2>, |mut h: ResMut<career::HubState>| {
+                h.dirty = true;
+                h.screen = career::Screen::Main;
+            }))
             .add_systems(Update, (career::hub_input, career::draw_hub).chain().run_if(in_state(AppState::Hub)))
             .add_systems(OnEnter(AppState::Match), setup_match)
             .add_systems(OnExit(AppState::Match), teardown_match)
@@ -228,7 +251,7 @@ fn setup_match(
     stadium::spawn_stadium(&mut commands, &mut meshes, &mut materials, &mut images, m.kit[0], m.kit[1], &league);
     players::spawn_players(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, &m);
     camera::spawn_camera(&mut commands);
-    let res = MatchRes { m, sfx: Sfx::default(), paused: false, pause_sel: 0, subs: None };
+    let res = MatchRes { m, sfx: Sfx::default(), paused: false, pause_sel: 0, subs: None, tactics: None };
     let mut talk = commentary::Commentary::new();
     talk.enabled = settings.commentary;
     commands.insert_resource(talk);
@@ -296,8 +319,13 @@ fn step_match(
     let left = keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft);
     let right = keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight);
 
-    if res.paused && res.subs.is_some() {
-        subs_input(&mut res, up, down, left, right, confirm, back, keys.just_pressed(KeyCode::Tab) || pad(GamepadButton::RightTrigger));
+    let swap_team = keys.just_pressed(KeyCode::Tab) || pad(GamepadButton::RightTrigger);
+    if res.paused && (res.subs.is_some() || res.tactics.is_some()) {
+        if res.subs.is_some() {
+            subs_input(&mut res, up, down, left, right, confirm, back, swap_team);
+        } else {
+            tactics_input(&mut res, up, down, left, right, confirm, back, swap_team);
+        }
         for c in res.sfx.drain_calls() {
             let names = [res.m.teams[0].name.clone(), res.m.teams[1].name.clone()];
             talk.react(&c, |t| names[t].clone());
@@ -327,11 +355,15 @@ fn step_match(
                     res.subs = Some(SubsUi { team, ..default() });
                 }
                 2 => {
+                    let team = res.m.humans.first().map_or(0, |h| h.team);
+                    res.tactics = Some(TacticsUi::open(&res.m, team));
+                }
+                3 => {
                     talk.enabled = !talk.enabled;
                     settings.commentary = talk.enabled;
                 }
-                3 if settings.career_fixture.is_some() => next.set(AppState::Hub),
-                3 => {
+                4 if settings.career_fixture.is_some() => next.set(AppState::Hub),
+                4 => {
                     // Re-enter the match state to rebuild everything from scratch.
                     next.set(AppState::Setup);
                     settings.mode = res.m.cfg.mode;
@@ -430,6 +462,44 @@ fn subs_input(res: &mut MatchRes, up: bool, down: bool, left: bool, right: bool,
     }
 }
 
+/// Tactics screen: Up/Down picks a row, Left/Right changes it, Enter applies, Esc backs out.
+#[allow(clippy::too_many_arguments)]
+fn tactics_input(res: &mut MatchRes, up: bool, down: bool, left: bool, right: bool, confirm: bool, back: bool, swap_team: bool) {
+    let MatchRes { m, tactics, .. } = res;
+    let Some(ui) = tactics.as_mut() else { return };
+    if back {
+        *tactics = None;
+        return;
+    }
+    if swap_team && m.humans.len() != 1 {
+        *ui = TacticsUi::open(m, 1 - ui.team);
+    }
+    if down {
+        ui.row = (ui.row + 1) % 3;
+    }
+    if up {
+        ui.row = (ui.row + 2) % 3;
+    }
+    let d: i32 = if right { 1 } else if left { -1 } else { 0 };
+    if d != 0 {
+        let cycle = |v: usize, len: usize| (v as i32 + d).rem_euclid(len as i32) as usize;
+        match ui.row {
+            0 => ui.formation = cycle(ui.formation, formation::NAMES.len()),
+            1 => {
+                let k = Mentality::ALL.iter().position(|x| *x == ui.mentality).unwrap_or(2);
+                ui.mentality = Mentality::ALL[cycle(k, Mentality::ALL.len())];
+            }
+            _ => {}
+        }
+    }
+    if confirm {
+        let (team, f, mentality) = (ui.team, formation::NAMES[ui.formation], ui.mentality);
+        m.set_tactics(team, f, mentality);
+        m.banner = Some((format!("TACTICS  ·  {}  {}  ·  {}", m.teams[team].short, f, mentality.label().to_uppercase()), 2.0));
+        *tactics = None;
+    }
+}
+
 fn snapshot(
     mut commands: Commands,
     mut snap: ResMut<Snapshot>,
@@ -437,6 +507,9 @@ fn snapshot(
     mut next: ResMut<NextState<AppState>>,
     mut settings: ResMut<Settings>,
     mut menu: ResMut<menu::MenuState>,
+    mut hub: ResMut<career::HubState>,
+    res: Option<ResMut<MatchRes>>,
+    car: Option<ResMut<career::Career>>,
     mut exit: EventWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -460,6 +533,22 @@ fn snapshot(
         (1500, AppState::Match) => settings.camera = CamMode::Pro,
         (1900, AppState::Match) => shot(&mut commands, "5_play"),
         (1950, AppState::Match) => settings.camera = CamMode::Broadcast,
+        (2200, AppState::Match) => {
+            if let Some(mut r) = res {
+                let mut ui = TacticsUi::open(&r.m, 0);
+                ui.formation = (ui.formation + 1) % formation::NAMES.len();
+                ui.mentality = Mentality::Attacking;
+                r.paused = true;
+                r.tactics = Some(ui);
+            }
+        }
+        (2260, AppState::Match) => shot(&mut commands, "5b_tactics"),
+        (2270, AppState::Match) => {
+            if let Some(mut r) = res {
+                r.paused = false;
+                r.tactics = None;
+            }
+        }
         (2700, AppState::Match) => shot(&mut commands, "6_play"),
         (2800, _) => {
             let mut c = career::Career::new_season(career::ClubRef { league: 5, club: 3 });
@@ -477,6 +566,34 @@ fn snapshot(
         }
         (2990, _) => shot(&mut commands, "8_hub_cup"),
         (3000, _) => {
+            hub.screen = career::Screen::Squad;
+            hub.squad = career::SquadUi { col: 0, row: 4, picked: Some((0, 3)) };
+            hub.dirty = true;
+        }
+        (3060, _) => shot(&mut commands, "9_hub_squad"),
+        (3070, _) => {
+            // Sign the best affordable forward so the screen shows a completed deal.
+            if let Some(mut c) = car {
+                let pick = c.market().into_iter().filter(|l| l.value <= c.budget() && matches!(l.card.pos, crate::data::types::Pos::ST)).max_by_key(|l| l.card.ovr);
+                if let Some(l) = pick {
+                    hub.market.msg = c.buy(l.player).unwrap_or_else(|e| e);
+                }
+            }
+            hub.screen = career::Screen::Transfers;
+            hub.market.row = 7;
+            hub.dirty = true;
+        }
+        (3150, _) => shot(&mut commands, "10_hub_transfers"),
+        (3160, _) => {
+            hub.market.league = Some(2);
+            hub.market.pos = 4;
+            hub.market.by_value = true;
+            hub.market.row = 1;
+            hub.market.msg.clear();
+            hub.dirty = true;
+        }
+        (3230, _) => shot(&mut commands, "11_hub_transfers_filtered"),
+        (3240, _) => {
             exit.write(AppExit::Success);
         }
         _ => {}

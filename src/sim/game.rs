@@ -2,10 +2,10 @@
 
 use super::consts::*;
 pub use super::events::{Call, Sfx};
-pub use super::formation::Role;
+pub use super::formation::{Mentality, Role};
 use super::input::Input;
 use super::rng::gen_range;
-use super::squad::TeamSetup;
+use super::squad::{refit, TeamSetup};
 use bevy::math::{vec2, Vec2};
 
 pub struct Player {
@@ -45,6 +45,8 @@ pub struct Player {
     pub fitness: f32,
     pub yellows: u8,
     pub sent_off: bool,
+    /// Carrying a knock: slower until substituted.
+    pub injured: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -178,8 +180,15 @@ pub struct Match {
     /// Squad indices that have been substituted off (they can't come back on).
     pub subbed_off: [Vec<usize>; 2],
     pub cards: Vec<(usize, String, bool, u32)>,
+    /// (team, name, minute) for every player who picked up a knock.
+    pub injuries: Vec<(usize, String, u32)>,
+    /// A human side's injured player and how long to keep prompting for a substitution.
+    pub injury_alert: Option<(usize, f32)>,
+    pub mentality: [Mentality; 2],
+    /// Sides whose tactics were set by hand; the CPU leaves those alone.
+    manual_tactics: [bool; 2],
     /// Display minutes at which the CPU has already reviewed substitutions.
-    cpu_sub_checks: [bool; 3],
+    cpu_sub_checks: [bool; 4],
     pub players: Vec<Player>,
     pub ball: Ball,
     pub phase: Phase,
@@ -259,6 +268,7 @@ impl Match {
                     fitness: 1.0,
                     yellows: 0,
                     sent_off: false,
+                    injured: false,
                 });
             }
         }
@@ -290,7 +300,11 @@ impl Match {
             subs_left: [5, 5],
             subbed_off: [Vec::new(), Vec::new()],
             cards: Vec::new(),
-            cpu_sub_checks: [false; 3],
+            injuries: Vec::new(),
+            injury_alert: None,
+            mentality: [Mentality::Balanced; 2],
+            manual_tactics: [false; 2],
+            cpu_sub_checks: [false; 4],
             players,
             ball: Ball {
                 pos: Vec2::ZERO,
@@ -327,9 +341,10 @@ impl Match {
 
     // ---------- frames of reference ----------
 
-    /// +1 if `team` attacks towards +x this half, -1 otherwise.
+    /// +1 if `team` attacks towards +x this half, -1 otherwise. Extra time keeps the same ends as
+    /// the first and second halves.
     pub fn dir(&self, team: usize) -> f32 {
-        if (team == 0) == (self.half == 1) {
+        if (team == 0) == (self.half % 2 == 1) {
             1.0
         } else {
             -1.0
@@ -370,10 +385,33 @@ impl Match {
         self.humans.iter().position(|h| h.team == team)
     }
 
+    /// Real seconds in the current period: halves 3 and 4 are extra time, a third as long.
+    pub fn half_len(&self) -> f32 {
+        if self.half <= 2 {
+            self.cfg.half_secs
+        } else {
+            self.cfg.half_secs / 3.0
+        }
+    }
+
     pub fn display_minute(&self) -> (u32, u32) {
-        let total = (self.clock / self.cfg.half_secs).min(1.0) * 45.0 * 60.0
-            + if self.half == 2 { 45.0 * 60.0 } else { 0.0 };
+        let (start, len) = match self.half {
+            1 => (0.0, 45.0),
+            2 => (45.0, 45.0),
+            3 => (90.0, 15.0),
+            _ => (105.0, 15.0),
+        };
+        let total = (start + (self.clock / self.half_len()).min(1.0) * len) * 60.0;
         ((total / 60.0) as u32, (total % 60.0) as u32)
+    }
+
+    pub fn period_label(&self) -> &'static str {
+        match self.half {
+            1 => "1st half",
+            2 => "2nd half",
+            3 => "Extra time 1st half",
+            _ => "Extra time 2nd half",
+        }
     }
 
     fn show(&mut self, text: impl Into<String>, secs: f32) {
@@ -587,11 +625,14 @@ impl Match {
         let t = p.team;
         let b = self.frame(t, self.ball.pos);
         let attacking = self.possession_team() == t;
-        let shift = if attacking { 9.0 } else { -5.0 };
-        let mut x = p.base.x + b.x * 0.62 + shift;
+        // Mentality moves the whole block up or down the pitch, the back line most of all.
+        let push = self.mentality[t].push();
+        let shift = if attacking { 9.0 + push * 5.0 } else { -5.0 + push * 4.0 };
+        let line = if p.role == Role::Def { push * 3.0 } else { 0.0 };
+        let mut x = p.base.x + b.x * 0.62 + shift + line;
         let (lo, hi) = match p.role {
             Role::Gk => (-51.0, -40.0),
-            Role::Def => (-47.0, 22.0),
+            Role::Def => (-47.0, 22.0 + push * 6.0),
             Role::Mid => (-42.0, 38.0),
             Role::Fwd => (-25.0, 46.0),
         };
@@ -603,7 +644,7 @@ impl Match {
             // Defenders hold a line that never sits deeper than the ball allows.
             x = x.min(b.x - 4.0).max(-47.0);
         }
-        let width = if attacking { 1.1 } else { 0.72 };
+        let width = if attacking { 1.1 + push * 0.06 } else { 0.72 };
         let y = (p.base.y * width + b.y * 0.33).clamp(-HALF_W + 2.0, HALF_W - 2.0);
         self.frame(t, vec2(x, y))
     }
@@ -617,6 +658,9 @@ impl Match {
         if self.ball.owner == Some(i) {
             s *= 0.88;
         }
+        if p.injured {
+            s *= 0.74;
+        }
         s * (0.94 + self.skill[p.team] * 0.1) * (0.82 + 0.18 * p.stamina)
     }
 
@@ -628,6 +672,12 @@ impl Match {
             *t -= dt;
             if *t <= 0.0 {
                 self.banner = None;
+            }
+        }
+        if let Some((i, t)) = &mut self.injury_alert {
+            *t -= dt;
+            if *t <= 0.0 || !self.players[*i].injured {
+                self.injury_alert = None;
             }
         }
         if self.phase == Phase::FullTime {
@@ -657,12 +707,18 @@ impl Match {
             Phase::HalfTime { timer } => {
                 let timer = timer - h;
                 if timer <= 0.0 {
-                    self.half = 2;
+                    self.half += 1;
                     self.clock = 0.0;
                     for p in &mut self.players {
-                        p.stamina = 1.0;
+                        // A full rest at half time; extra time only gets back what fitness allows.
+                        p.stamina = if self.half == 2 { 1.0 } else { p.stamina.max(p.fitness) };
                     }
-                    self.begin_restart(Restart::KickOff, 1 - self.first_kickoff, Vec2::ZERO, Some(sfx));
+                    if self.half == 3 {
+                        // One extra substitution each for extra time.
+                        self.subs_left = self.subs_left.map(|s| s + 1);
+                    }
+                    let kicks = if self.half % 2 == 1 { self.first_kickoff } else { 1 - self.first_kickoff };
+                    self.begin_restart(Restart::KickOff, kicks, Vec2::ZERO, Some(sfx));
                     self.snap_to_setpiece();
                     sfx.whistle();
                 } else {
@@ -670,6 +726,10 @@ impl Match {
                 }
             }
             Phase::SetPiece { kind, team, spot, timer } => {
+                // Let the injury banner be read before the replacement is announced.
+                if self.shootout.is_none() && timer < 0.4 {
+                    self.cpu_injury_subs(sfx);
+                }
                 let mut targets = [Vec2::ZERO; PLAYERS];
                 let mut faces = [Vec2::ZERO; PLAYERS];
                 for i in 0..PLAYERS {
@@ -750,11 +810,14 @@ impl Match {
             p.fitness = (p.fitness - decay * (0.7 + (1.0 - p.stamina))).max(0.4);
         }
         let (min, _) = self.display_minute();
-        for (k, at) in [60u32, 70, 80].iter().enumerate() {
+        for (k, at) in [60u32, 70, 80, 95].iter().enumerate() {
             if min >= *at && !self.cpu_sub_checks[k] {
                 self.cpu_sub_checks[k] = true;
-                self.cpu_substitutions(sfx, 2);
+                self.cpu_substitutions(sfx, if k == 3 { 1 } else { 2 });
             }
+        }
+        if self.shootout.is_none() {
+            self.cpu_tactics(min, sfx);
         }
         let pt = self.possession_team();
         self.possession[pt] += h;
@@ -838,13 +901,21 @@ impl Match {
             }
             return;
         }
-        if self.phase == Phase::Play && self.clock >= self.cfg.half_secs {
+        if self.phase == Phase::Play && self.clock >= self.half_len() {
             sfx.whistle_long();
+            let level = self.score[0] == self.score[1];
             if self.half == 1 {
                 self.phase = Phase::HalfTime { timer: 3.5 };
                 sfx.call(Call::HalfTime);
                 self.show("HALF TIME", 3.5);
-            } else if self.cfg.knockout && self.score[0] == self.score[1] {
+            } else if self.half == 2 && self.cfg.knockout && level {
+                self.phase = Phase::HalfTime { timer: 3.5 };
+                sfx.call(Call::ExtraTime);
+                self.show("EXTRA TIME", 3.5);
+            } else if self.half == 3 {
+                self.phase = Phase::HalfTime { timer: 2.0 };
+                self.show("EXTRA TIME  ·  CHANGE ENDS", 2.0);
+            } else if self.cfg.knockout && level {
                 self.start_shootout(sfx);
                 return;
             } else {
@@ -1173,8 +1244,12 @@ impl Match {
             self.players[c].no_touch = 0.35;
             sfx.tackle();
             sfx.call(Call::Tackle { player: self.players[i].name.clone() });
+            if self.injure(c, 0.006, sfx) {
+                let name = self.players[c].name.clone();
+                self.show(format!("INJURY  ·  {name}"), 2.0);
+            }
         } else if self.shootout.is_none() && gen_range(0.0, 1.0) < 0.16 {
-            self.foul(i, c, sfx);
+            self.foul(i, c, false, sfx);
         } else {
             self.players[i].stun = 0.45;
         }
@@ -1194,6 +1269,11 @@ impl Match {
                     if self.players[c].team != team {
                         self.players[c].stun = 0.7;
                         self.players[c].no_touch = 0.4;
+                        // Won the ball, but took the man with it.
+                        if self.injure(c, 0.025, sfx) {
+                            let name = self.players[c].name.clone();
+                            self.show(format!("INJURY  ·  {name}"), 2.0);
+                        }
                     } else {
                         continue;
                     }
@@ -1210,15 +1290,15 @@ impl Match {
             if let Some(c) = self.ball.owner {
                 if self.players[c].team != team && self.players[c].pos.distance(p.pos) < 0.95 {
                     self.players[i].slide_hit = true;
-                    self.foul(i, c, sfx);
+                    self.foul(i, c, true, sfx);
                     return;
                 }
             }
         }
     }
 
-    /// Whistles a foul by `i` on `c`: card if deserved, then a free kick or penalty.
-    fn foul(&mut self, i: usize, c: usize, sfx: &Sfx) {
+    /// Whistles a foul by `i` on `c`: card if deserved, a possible injury, then a free kick or penalty.
+    fn foul(&mut self, i: usize, c: usize, slide: bool, sfx: &Sfx) {
         let team = self.players[i].team;
         let spot = self.players[c].pos;
         let fouled = self.players[c].team;
@@ -1226,6 +1306,13 @@ impl Match {
         sfx.tackle();
         sfx.call(Call::Foul { by: self.players[i].name.clone() });
         let card = self.book(i, c, sfx);
+        // Reckless challenges (the ones that get carded, and lunges from the ground) hurt more.
+        let risk = match &card {
+            Some((_, true)) => 0.3,
+            Some((_, false)) => 0.12,
+            None => 0.04,
+        } + if slide { 0.05 } else { 0.0 };
+        let hurt = self.injure(c, risk, sfx).then(|| self.players[c].name.clone());
         if self.in_box(team, spot) {
             let pen = self.own_goal(team) + vec2(PEN_SPOT * self.dir(team), 0.0);
             self.begin_restart(Restart::Penalty, fouled, pen, Some(sfx));
@@ -1233,11 +1320,57 @@ impl Match {
             let spot = vec2(spot.x.clamp(-HALF_L + 1.0, HALF_L - 1.0), spot.y.clamp(-HALF_W + 1.0, HALF_W - 1.0));
             self.begin_restart(Restart::FreeKick, fouled, spot, Some(sfx));
         }
-        match card {
-            Some((name, true)) => self.show(format!("RED CARD  ·  {name}"), 2.4),
-            Some((name, false)) => self.show(format!("YELLOW CARD  ·  {name}"), 2.0),
-            None => self.show("FOUL!", 1.2),
+        let (text, secs) = match card {
+            Some((name, true)) => (format!("RED CARD  ·  {name}"), 2.4),
+            Some((name, false)) => (format!("YELLOW CARD  ·  {name}"), 2.0),
+            None => ("FOUL!".to_string(), 1.2),
+        };
+        match hurt {
+            Some(name) => self.show(format!("{text}  ·  {name} INJURED"), 2.6),
+            None => self.show(text, secs),
         }
+    }
+
+    /// Rolls for an injury to `c` with probability `chance`. Returns true if he picked one up.
+    fn injure(&mut self, c: usize, chance: f32, sfx: &Sfx) -> bool {
+        let p = &self.players[c];
+        if p.injured || p.sent_off || self.shootout.is_some() || gen_range(0.0, 1.0) >= chance {
+            return false;
+        }
+        let (team, name) = (p.team, p.name.clone());
+        self.players[c].injured = true;
+        self.players[c].stun = self.players[c].stun.max(1.4);
+        let (min, _) = self.display_minute();
+        self.injuries.push((team, name.clone(), min + 1));
+        sfx.call(Call::Injury { player: name });
+        if self.human_of_team(team).is_some() {
+            self.injury_alert = Some((c, 8.0));
+        }
+        true
+    }
+
+    /// CPU sides replace injured players at the first stoppage, keepers included.
+    fn cpu_injury_subs(&mut self, sfx: &Sfx) {
+        for t in 0..2 {
+            if self.human_of_team(t).is_some() || self.subs_left[t] == 0 {
+                continue;
+            }
+            let Some(i) = Self::team_range(t).find(|&j| self.players[j].injured && !self.players[j].sent_off) else { continue };
+            if let Some(k) = self.best_replacement(t, i) {
+                self.substitute(i, k, sfx);
+            }
+        }
+    }
+
+    /// The bench player who best fits the slot `i` stands in.
+    fn best_replacement(&self, t: usize, i: usize) -> Option<usize> {
+        use crate::data::types::Pos;
+        let want = self.teams[t].slots()[i - t * PER_TEAM].pos;
+        self.bench(t).into_iter().max_by_key(|&k| {
+            let c = &self.teams[t].squad[k];
+            let wrong_keeper = (want == Pos::GK) != (c.pos == Pos::GK);
+            c.ovr as i32 - super::squad::fit_penalty(want, c.pos) - if wrong_keeper { 100 } else { 0 }
+        })
     }
 
     /// Decides whether a foul by `i` on `c` earns a card, applies it, and returns (name, red).
@@ -1326,6 +1459,7 @@ impl Match {
         p.stamina = 1.0;
         p.fitness = 1.0;
         p.yellows = 0;
+        p.injured = false;
         self.subbed_off[t].push(off);
         self.subs_left[t] -= 1;
         self.show(format!("SUB  ·  {} on, {} off", c.name, old_name), 2.0);
@@ -1345,16 +1479,104 @@ impl Match {
                     .filter(|&j| !self.players[j].sent_off && self.players[j].fitness < 0.8)
                     .min_by(|&a, &b| self.players[a].fitness.total_cmp(&self.players[b].fitness));
                 let Some(i) = tired else { break };
-                let want = self.teams[t].slots()[i - t * PER_TEAM].pos;
-                let best = self.bench(t).into_iter().max_by_key(|&k| {
-                    let c = &self.teams[t].squad[k];
-                    c.ovr as i32 - super::squad::fit_penalty(want, c.pos) - if c.pos == crate::data::types::Pos::GK { 100 } else { 0 }
-                });
-                match best {
+                match self.best_replacement(t, i) {
                     Some(k) if self.substitute(i, k, sfx) => {}
                     _ => break,
                 }
             }
+        }
+    }
+
+    /// CPU sides chase the game when behind after 70' and protect a lead after 80'.
+    fn cpu_tactics(&mut self, min: u32, sfx: &Sfx) {
+        for t in 0..2 {
+            if self.human_of_team(t).is_some() || self.manual_tactics[t] {
+                continue;
+            }
+            let diff = self.score[t] as i32 - self.score[1 - t] as i32;
+            let want = if diff < 0 && min >= 70 {
+                Mentality::Attacking
+            } else if diff > 0 && min >= 80 {
+                Mentality::Defensive
+            } else {
+                continue;
+            };
+            if self.mentality[t] != want {
+                self.mentality[t] = want;
+                let attacking = want == Mentality::Attacking;
+                let what = if attacking { "GO FOR IT" } else { "SIT DEEP" };
+                if self.banner.is_none() {
+                    self.show(format!("{}  ·  {}", self.teams[t].short, what), 1.8);
+                }
+                sfx.call(Call::Tactics { team: t, attacking });
+            }
+        }
+    }
+
+    /// For each slot of formation `name`, the team-local index (0..11) of the player who would
+    /// fill it if `team` switched now. Same eleven players; the keeper stays in goal.
+    pub fn formation_fit(&self, team: usize, name: &str) -> [usize; 11] {
+        let start = team * PER_TEAM;
+        let pos = std::array::from_fn(|k| self.teams[team].squad[self.players[start + k].card].pos);
+        let active = std::array::from_fn(|k| !self.players[start + k].sent_off);
+        refit(&pos, &active, &self.teams[team].slots(), &super::formation::slots(name))
+    }
+
+    /// Changes a side's formation and mentality mid-match. Players keep their identities and are
+    /// re-seated into the new slots; every stored player index is remapped to match.
+    pub fn set_tactics(&mut self, team: usize, formation: &str, mentality: Mentality) {
+        self.manual_tactics[team] = true;
+        self.mentality[team] = mentality;
+        if formation == self.teams[team].formation {
+            return;
+        }
+        let fit = self.formation_fit(team, formation);
+        let start = team * PER_TEAM;
+        // map[old global index] = new global index
+        let mut map: [usize; PLAYERS] = std::array::from_fn(|i| i);
+        for (k, &old) in fit.iter().enumerate() {
+            map[start + old] = start + k;
+        }
+        let mut moved: Vec<Option<Player>> = self.players.drain(start..start + PER_TEAM).map(Some).collect();
+        let slots = super::formation::slots(formation);
+        let seated: Vec<Player> = (0..PER_TEAM)
+            .map(|k| {
+                let mut p = moved[fit[k]].take().unwrap();
+                p.role = slots[k].role;
+                p.base = slots[k].at;
+                p
+            })
+            .collect();
+        self.players.splice(start..start, seated);
+
+        let re = |i: usize| map[i];
+        for h in &mut self.humans {
+            h.player = re(h.player);
+        }
+        self.ball.owner = self.ball.owner.map(re);
+        self.ball.kicker = self.ball.kicker.map(re);
+        self.ball.pass_target = self.ball.pass_target.map(re);
+        self.setpiece_taker = self.setpiece_taker.map(re);
+        if let Some(l) = &mut self.lock {
+            l.taker = re(l.taker);
+        }
+        for o in &mut self.offside {
+            *o = re(*o);
+        }
+        if let Some(sh) = &mut self.shootout {
+            for order in &mut sh.order {
+                for j in order.iter_mut() {
+                    *j = re(*j);
+                }
+            }
+        }
+        if let Some((i, _)) = &mut self.injury_alert {
+            *i = re(*i);
+        }
+        let setup = &mut self.teams[team];
+        setup.formation = formation.to_string();
+        for k in 0..PER_TEAM {
+            setup.xi[k] = self.players[start + k].card;
         }
     }
 
@@ -1937,6 +2159,147 @@ mod tests {
         }
         println!("goals {goals} shots {shots} restarts {restarts}");
         assert!(shots > 0, "nobody ever shot");
+    }
+
+    fn knockout_match(seed: u64, half_secs: f32) -> Match {
+        srand(seed);
+        let teams = [TeamSetup::from_club(&club("Home", 78, "4-4-2")), TeamSetup::from_club(&club("Away", 78, "4-3-3"))];
+        let cfg = MatchConfig { mode: Mode::Watch, half_secs, difficulty: 0.6, knockout: true, human_team: 0 };
+        Match::new(cfg, teams)
+    }
+
+    /// A knockout tie still level after 90 minutes plays two periods of extra time, then penalties.
+    #[test]
+    fn knockout_draw_goes_to_extra_time_then_penalties() {
+        let mut m = knockout_match(11, 30.0);
+        let sfx = Sfx::default();
+        let mut halves = vec![m.half];
+        let mut max_minute = 0;
+        let mut extra_time_called = false;
+        let mut subs_at_et = None;
+        for _ in 0..120 * 60 * 10 {
+            if m.shootout.is_none() {
+                // Keep it level so the tie has to be settled the long way.
+                let s = m.score[0].max(m.score[1]);
+                m.score = [s, s];
+            }
+            m.step(1.0 / 120.0, &[], &sfx);
+            sfx.drain();
+            extra_time_called |= sfx.drain_calls().contains(&Call::ExtraTime);
+            if halves.last() != Some(&m.half) {
+                halves.push(m.half);
+                if m.half == 3 {
+                    subs_at_et = Some(m.subs_left);
+                }
+            }
+            if m.shootout.is_none() {
+                max_minute = max_minute.max(m.display_minute().0);
+            }
+            if m.phase == Phase::FullTime {
+                break;
+            }
+        }
+        assert_eq!(halves, vec![1, 2, 3, 4], "periods played");
+        assert!(extra_time_called, "no extra-time call");
+        assert!((119..=120).contains(&max_minute), "clock reached {max_minute}'");
+        assert!(subs_at_et.is_some_and(|s| s[0] >= 1 && s[1] >= 1), "extra-time substitution granted");
+        let sh = m.shootout.as_ref().expect("no shootout after extra time");
+        assert!(sh.winner.is_some(), "shootout had no winner");
+        assert_eq!(m.phase, Phase::FullTime);
+    }
+
+    /// A knockout tie decided in normal time doesn't get extra time.
+    #[test]
+    fn knockout_winner_skips_extra_time() {
+        let mut m = knockout_match(12, 20.0);
+        let sfx = Sfx::default();
+        m.half = 2;
+        m.clock = 19.9;
+        m.score = [2, 1];
+        m.phase = Phase::Play;
+        m.lock = None;
+        for _ in 0..240 {
+            m.step(1.0 / 120.0, &[], &sfx);
+        }
+        assert_eq!(m.phase, Phase::FullTime);
+        assert_eq!(m.half, 2);
+        assert!(m.shootout.is_none());
+    }
+
+    fn assert_shape(m: &Match, team: usize, cards_before: &[usize]) {
+        let r = Match::team_range(team);
+        assert_eq!(r.len(), 11);
+        let keepers = r.clone().filter(|&j| m.players[j].role == Role::Gk).count();
+        assert_eq!(keepers, 1, "exactly one keeper");
+        assert_eq!(m.players[r.start].role, Role::Gk, "keeper in slot 0");
+        let mut now: Vec<usize> = r.clone().map(|j| m.players[j].card).collect();
+        let mut before = cards_before.to_vec();
+        now.sort();
+        before.sort();
+        assert_eq!(now, before, "same eleven players on the pitch");
+        let slots = m.teams[team].slots();
+        for (k, j) in r.enumerate() {
+            assert_eq!(m.players[j].role, slots[k].role);
+            assert_eq!(m.teams[team].xi[k], m.players[j].card);
+        }
+    }
+
+    /// Changing formation mid-match keeps the same eleven, one keeper in goal, and valid indices.
+    #[test]
+    fn tactics_change_keeps_eleven_and_one_keeper() {
+        let mut m = knockout_match(5, 60.0);
+        let sfx = Sfx::default();
+        for _ in 0..120 * 8 {
+            m.step(1.0 / 120.0, &[], &sfx);
+        }
+        let keeper = m.players[0].card;
+        // One player off, to check that sent-off players stay off.
+        m.send_off(4);
+        let red = m.players[4].card;
+        let cards: Vec<usize> = Match::team_range(0).map(|j| m.players[j].card).collect();
+        for (n, f) in crate::sim::formation::NAMES.iter().enumerate() {
+            m.set_tactics(0, f, Mentality::ALL[n % 5]);
+            assert_eq!(m.teams[0].formation, *f);
+            assert_eq!(m.mentality[0], Mentality::ALL[n % 5]);
+            assert_eq!(m.players[0].card, keeper, "keeper never moves");
+            assert_shape(&m, 0, &cards);
+            let off: Vec<usize> = Match::team_range(0).filter(|&j| m.players[j].sent_off).collect();
+            assert_eq!(off.len(), 1);
+            assert_eq!(m.players[off[0]].card, red);
+            for _ in 0..120 * 3 {
+                m.step(1.0 / 120.0, &[], &sfx);
+                if let Some(o) = m.ball.owner {
+                    assert!(!m.players[o].sent_off, "a sent-off player has the ball");
+                }
+            }
+        }
+        // Formations in a team's frame stay attacking +x: the striker slot is the furthest forward.
+        let s = m.teams[0].slots();
+        assert!(s[10].at.x > s[1].at.x);
+    }
+
+    /// CPU sides replace an injured player at the next stoppage; with no subs left he limps on.
+    #[test]
+    fn cpu_replaces_injured_players() {
+        let mut m = knockout_match(9, 60.0);
+        let sfx = Sfx::default();
+        let hurt = 3;
+        m.players[hurt].injured = true;
+        let before = m.players[hurt].card;
+        let slow = m.max_speed(hurt, false);
+        m.players[hurt].injured = false;
+        assert!(slow < m.max_speed(hurt, false), "injury slows a player down");
+        m.players[hurt].injured = true;
+        m.subs_left[1] = 0;
+        m.players[PER_TEAM + 2].injured = true;
+        m.begin_restart(Restart::ThrowIn, 0, vec2(0.0, HALF_W), Some(&sfx));
+        for _ in 0..120 * 2 {
+            m.step(1.0 / 120.0, &[], &sfx);
+        }
+        assert_ne!(m.players[hurt].card, before, "injured player was replaced");
+        assert!(!m.players[hurt].injured);
+        assert_eq!(m.subs_left[0], 4);
+        assert!(m.players[PER_TEAM + 2].injured, "no subs left: he plays on");
     }
 }
 

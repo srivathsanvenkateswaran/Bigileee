@@ -313,7 +313,7 @@ pub fn update_hud(
         set(&mut t, format!("{:02}:{:02}", min, sec));
     }
     if let Ok(mut t) = texts.p2().single_mut() {
-        set(&mut t, if m.half == 1 { "1st half".into() } else { "2nd half".into() });
+        set(&mut t, m.period_label().into());
     }
 
     // Banner.
@@ -347,7 +347,7 @@ pub fn update_hud(
     for (mut t, name) in &mut texts.p4() {
         if let Some(h) = m.humans.get(name.0) {
             let p = &m.players[h.player];
-            set(&mut t, format!("{}  {}", p.num, p.name));
+            set(&mut t, format!("{}  {}{}", p.num, p.name, if p.injured { "  [INJ]" } else { "" }));
         }
     }
     for (bar, mut node) in &mut bars.p0() {
@@ -376,9 +376,19 @@ pub fn update_hud(
         node.top = Val::Px((p.y + HALF_W) / (2.0 * HALF_W) * MAP_H - size / 2.0);
     }
 
-    // Set-piece prompt for a human taker.
+    // Set-piece prompt for a human taker, otherwise a nudge to replace an injured player.
     if let Ok((mut t, mut c)) = texts.p5().single_mut() {
         let msg = m.lock.and_then(|l| m.humans.iter().position(|h| h.player == l.taker).map(|h| (l, h)));
+        let injury = m.injury_alert.filter(|_| !view.replay && !res.paused).map(|(i, _)| {
+            let p = &m.players[i];
+            let h = m.human_of_team(p.team).unwrap_or(0);
+            let line = if m.subs_left[p.team] > 0 {
+                format!("{} is injured  ·  pause (Esc / Start) and pick Substitutions to replace him", p.name)
+            } else {
+                format!("{} is injured, but there are no subs left  ·  he'll have to limp on", p.name)
+            };
+            (line, h)
+        });
         match msg {
             Some((l, h)) if !view.replay => {
                 c.0 = HUMAN_COLOURS[h.min(1)];
@@ -392,13 +402,21 @@ pub fn update_hud(
                     },
                 );
             }
-            _ => set(&mut t, String::new()),
+            _ => match injury {
+                Some((line, h)) => {
+                    c.0 = HUMAN_COLOURS[h.min(1)];
+                    set(&mut t, line);
+                }
+                None => set(&mut t, String::new()),
+            },
         }
     }
 
     // Pause, half-time and full-time panel.
     let panel = if let (true, Some(ui)) = (res.paused, res.subs) {
         Some((format!("SUBSTITUTIONS  ·  {}", m.teams[ui.team].short), subs_body(&res, ui)))
+    } else if let (true, Some(ui)) = (res.paused, res.tactics) {
+        Some((format!("TACTICS  ·  {}", m.teams[ui.team].short), tactics_body(&res, ui)))
     } else if res.paused {
         let body = super::PAUSE_ITEMS
             .iter()
@@ -412,7 +430,14 @@ pub fn update_hud(
         Some(("PAUSED".to_string(), body))
     } else {
         match m.phase {
-            Phase::HalfTime { .. } => Some(("HALF TIME".into(), report(&res))),
+            Phase::HalfTime { .. } => {
+                let title = match m.half {
+                    1 => "HALF TIME",
+                    2 => "EXTRA TIME",
+                    _ => "EXTRA TIME  ·  HALF TIME",
+                };
+                Some((title.into(), report(&res)))
+            }
             Phase::FullTime => Some(("FULL TIME".into(), format!("{}\n\nPress Enter / A to continue", report(&res)))),
             _ => None,
         }
@@ -451,6 +476,12 @@ fn report(res: &MatchRes) -> String {
             s.push_str(&format!("\n{}'  {}  ({})", minute, name, m.teams[*team].short));
         }
     }
+    if !m.injuries.is_empty() {
+        s.push_str("\n\nInjuries");
+        for (team, name, minute) in &m.injuries {
+            s.push_str(&format!("\n{}'  {}  ({})", minute, name, m.teams[*team].short));
+        }
+    }
     s
 }
 
@@ -468,7 +499,8 @@ fn subs_body(res: &MatchRes, ui: super::SubsUi) -> String {
             "  sent off".to_string()
         } else {
             let card = if p.yellows > 0 { "  [Y]" } else { "" };
-            format!("  {:>3}% fit{}", (p.fitness.min(p.stamina) * 100.0) as u32, card)
+            let hurt = if p.injured { "  INJURED" } else { "" };
+            format!("  {:>3}% fit{}{}", (p.fitness.min(p.stamina) * 100.0) as u32, card, hurt)
         };
         let chosen = if ui.out == Some(i) { "  <- OFF" } else { "" };
         lines.push(format!("{}{:<4} {:>2} {}  {}{}{}", mark(0, k), format!("{:?}", slots[k].pos), p.num, p.name, p.ovr, status, chosen));
@@ -485,6 +517,43 @@ fn subs_body(res: &MatchRes, ui: super::SubsUi) -> String {
     }
     lines.push(String::new());
     let hint = if ui.out.is_some() { "Pick who comes on  ·  Esc cancel" } else { "Pick who comes off  ·  Esc back" };
+    lines.push(if m.humans.len() == 1 { hint.to_string() } else { format!("{hint}  ·  Tab / RB other team") });
+    lines.join("\n")
+}
+
+fn tactics_body(res: &MatchRes, ui: super::TacticsUi) -> String {
+    use crate::sim::formation::{slots, NAMES};
+    let m = &res.m;
+    let t = ui.team;
+    let name = NAMES[ui.formation];
+    let pick = |row: usize, label: &str, value: &str| {
+        if ui.row == row { format!("{label}    <  {value}  >") } else { format!("{label}    {value}") }
+    };
+    let mut lines = vec![
+        format!("Now: {}  ·  {}", m.teams[t].formation, m.mentality[t].label()),
+        String::new(),
+        pick(0, "Formation", name),
+        pick(1, "Mentality", ui.mentality.label()),
+        if ui.row == 2 { "> Apply <".to_string() } else { "Apply".to_string() },
+        String::new(),
+        format!("NEW SHAPE  ·  {name}"),
+    ];
+    let fit = m.formation_fit(t, name);
+    let new_slots = slots(name);
+    for (k, &old) in fit.iter().enumerate() {
+        let p = &m.players[t * 11 + old];
+        let natural = m.teams[t].squad[p.card].pos;
+        let note = if p.sent_off {
+            "  sent off".to_string()
+        } else if crate::sim::squad::fit_penalty(new_slots[k].pos, natural) > 2 {
+            format!("  (plays {natural:?})")
+        } else {
+            String::new()
+        };
+        lines.push(format!("{:<4} {:>2} {}{}", format!("{:?}", new_slots[k].pos), p.num, p.name, note));
+    }
+    lines.push(String::new());
+    let hint = "Up/Down choose  ·  Left/Right change  ·  Enter apply  ·  Esc back";
     lines.push(if m.humans.len() == 1 { hint.to_string() } else { format!("{hint}  ·  Tab / RB other team") });
     lines.join("\n")
 }

@@ -196,6 +196,71 @@ impl TeamSetup {
         self.formation = name.to_string();
         self.xi = pick_xi(&self.squad, &self.slots());
     }
+
+    /// Removes squad members (they've been sold), promotes youth fillers so the club still has two
+    /// keepers and sixteen players, and re-picks the XI.
+    pub fn drop_players(&mut self, gone: &[usize]) {
+        if gone.is_empty() {
+            return;
+        }
+        let mut k = 0;
+        self.squad.retain(|_| {
+            k += 1;
+            !gone.contains(&(k - 1))
+        });
+        let mut rng = Seeded::new(&format!("{} youth", self.name));
+        let free_num = |squad: &Vec<Card>| (2..99u8).find(|n| !squad.iter().any(|c| c.num == *n)).unwrap_or(99);
+        while self.squad.iter().filter(|c| c.pos == Pos::GK).count() < 2 {
+            let n = free_num(&self.squad);
+            let c = filler(&mut rng, Pos::GK, n, self.rating, &self.squad);
+            self.squad.push(c);
+        }
+        let pad = [Pos::CB, Pos::CM, Pos::ST, Pos::RB, Pos::LB, Pos::LW, Pos::CDM];
+        let mut k = 0;
+        while self.squad.len() < 16 {
+            let n = free_num(&self.squad);
+            let c = filler(&mut rng, pad[k % pad.len()], n, self.rating, &self.squad);
+            self.squad.push(c);
+            k += 1;
+        }
+        self.xi = pick_xi(&self.squad, &self.slots());
+    }
+}
+
+/// Seats the same eleven players in a new formation. `pos[k]` is the natural position of whoever
+/// stands in old slot k and `active[k]` is false for anyone sent off. Returns, for each new slot,
+/// the old slot that fills it. The keeper (slot 0) never moves; players who are off the pitch
+/// take whatever slots are left once everyone else is placed.
+pub fn refit(pos: &[Pos; 11], active: &[bool; 11], old: &[Slot; 11], new: &[Slot; 11]) -> [usize; 11] {
+    let mut out = [0usize; 11];
+    let mut used = [false; 11];
+    used[0] = true;
+    let cost = |k: usize, j: usize| {
+        let same_role = old[j].role == new[k].role;
+        fit_penalty(new[k].pos, pos[j]) * 4 - same_role as i32 * 3
+    };
+    let mut order: Vec<usize> = (1..11).collect();
+    order.sort_by_key(|&k| (1..11).filter(|&j| active[j] && fit_penalty(new[k].pos, pos[j]) <= 2).count());
+    for k in order {
+        let best = (1..11).filter(|&j| !used[j]).min_by_key(|&j| (!active[j], cost(k, j), j)).unwrap();
+        used[best] = true;
+        out[k] = best;
+    }
+    // Greedy can strand players; swap any pair of active players whose exchange fits better.
+    let mut improved = true;
+    while improved {
+        improved = false;
+        for a in 1..11 {
+            for b in a + 1..11 {
+                let (ja, jb) = (out[a], out[b]);
+                if active[ja] && active[jb] && cost(a, jb) + cost(b, ja) < cost(a, ja) + cost(b, jb) {
+                    out.swap(a, b);
+                    improved = true;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Greedy XI: goalkeeper first, then each slot takes the best remaining player, penalised for playing out of position.
