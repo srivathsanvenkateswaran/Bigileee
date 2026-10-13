@@ -1,7 +1,6 @@
 //! Turns a club's player cards into a match squad and starting XI.
 
 use super::formation::{self, Slot};
-use super::rng::gen_range;
 use crate::data::types::{Club, Crest, Pos, P};
 
 #[derive(Clone, Debug)]
@@ -54,17 +53,40 @@ pub struct TeamSetup {
     pub xi: [usize; 11],
 }
 
-const FIRST: [&str; 30] = [
+const FIRST: [&str; 32] = [
     "Arun", "Karthik", "Vijay", "Ravi", "Sanjay", "Mateo", "Lucas", "Noah", "Leo", "Omar", "Yusuf", "Kenji",
     "Diego", "Tomas", "Felix", "Ivan", "Hugo", "Rafael", "Ade", "Kwame", "Elias", "Nikhil", "Pranav", "Suresh",
-    "Andre", "Marco", "Jonas", "Emil", "Kai", "Theo",
+    "Andre", "Marco", "Jonas", "Emil", "Kai", "Theo", "Bruno", "Sami",
 ];
-const LAST: [&str; 40] = [
-    "Benchwarmer", "Iyer", "Pillai", "Menon", "Natarajan", "Okoro", "Mensah", "Albuquerque", "Moreau", "Novak",
-    "Larsen", "Kovac", "Haddad", "Tanaka", "Azevedo", "Reyes", "Fischer", "Brandt", "Petrov", "Mbeki", "Duarte",
-    "Lindqvist", "Ricci", "Varga", "Kaur", "Sethi", "Banerjee", "Rahman", "Osei", "Navarro", "Ferreira", "Holm",
-    "Weber", "Castillo", "Aziz", "Krishnan", "Subramanian", "Gomez", "Nakamura", "Valdez",
+/// Fictional fillers get food surnames, in keeping with the league names.
+const LAST: [&str; 48] = [
+    "Benchwarmer", "Sambar", "Chutney", "Pappadum", "Rasam", "Kurma", "Idli", "Vadai", "Halwa", "Payasam",
+    "Bajji", "Kesari", "Upma", "Pongal", "Murukku", "Laddu", "Jalebi", "Kulfi", "Samosa", "Pakora", "Naan",
+    "Kebab", "Hummus", "Falafel", "Taco", "Burrito", "Nacho", "Pretzel", "Strudel", "Baguette", "Croquette",
+    "Gelato", "Risotto", "Ravioli", "Churro", "Empanada", "Feijoada", "Brigadeiro", "Poutine", "Waffle",
+    "Bratwurst", "Pierogi", "Gnocchi", "Tiramisu", "Shawarma", "Kunafa", "Dumpling", "Biryani",
 ];
+
+/// Deterministic per-club randomness, so fillers keep their names and ratings between matches.
+struct Seeded(u64);
+
+impl Seeded {
+    fn new(name: &str) -> Seeded {
+        Seeded(name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3)) | 1)
+    }
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn range(&mut self, lo: i32, hi: i32) -> i32 {
+        lo + (self.next() % (hi - lo) as u64) as i32
+    }
+    fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+        xs[(self.next() % xs.len() as u64) as usize]
+    }
+}
 
 /// How well a player at `has` covers a slot asking for `want`: 0 is natural, higher is worse.
 pub fn fit_penalty(want: Pos, has: Pos) -> i32 {
@@ -98,8 +120,8 @@ pub fn fit_penalty(want: Pos, has: Pos) -> i32 {
     }
 }
 
-fn filler(pos: Pos, num: u8, rating: u8) -> Card {
-    let r = |base: i32, spread: i32| (base + gen_range(-spread, spread + 1)).clamp(35, 95) as u8;
+fn filler(rng: &mut Seeded, pos: Pos, num: u8, rating: u8, taken: &[Card]) -> Card {
+    let mut r = |base: i32, spread: i32| (base + rng.range(-spread, spread + 1)).clamp(35, 95) as u8;
     let ovr = r(rating as i32 - 5, 3);
     let o = ovr as i32;
     let (pac, sho, pas, dri, def, phy) = match pos {
@@ -111,13 +133,19 @@ fn filler(pos: Pos, num: u8, rating: u8) -> Card {
         Pos::LM | Pos::RM | Pos::LW | Pos::RW => (r(o + 6, 4), r(o - 3, 4), r(o - 2, 4), r(o + 3, 3), r(o - 30, 6), r(o - 10, 5)),
         Pos::ST => (r(o + 2, 5), r(o + 3, 3), r(o - 8, 5), r(o, 4), r(o - 35, 6), r(o, 5)),
     };
-    let name = format!("{} {}", FIRST[gen_range(0, FIRST.len())], LAST[gen_range(0, LAST.len())]);
+    let name = loop {
+        let n = format!("{} {}", rng.pick(&FIRST), rng.pick(&LAST));
+        if !taken.iter().any(|c| c.name == n) {
+            break n;
+        }
+    };
     Card { name, pos, num, ovr, pac, sho, pas, dri, def, phy, generated: true }
 }
 
 impl TeamSetup {
     pub fn from_club(club: &Club) -> TeamSetup {
         let mut squad: Vec<Card> = club.players.iter().map(Card::from).collect();
+        let mut rng = Seeded::new(club.name);
         let slots = formation::slots(club.formation);
 
         let free_num = |squad: &Vec<Card>| (2..99u8).find(|n| !squad.iter().any(|c| c.num == *n)).unwrap_or(99);
@@ -125,21 +153,21 @@ impl TeamSetup {
         let gks = squad.iter().filter(|c| c.pos == Pos::GK).count();
         for _ in gks..2 {
             let n = if squad.iter().any(|c| c.num == 1) { free_num(&squad) } else { 1 };
-            squad.push(filler(Pos::GK, n, club.rating));
+            squad.push(filler(&mut rng, Pos::GK, n, club.rating, &squad));
         }
         for slot in slots.iter().skip(1) {
             let covered = squad.iter().filter(|c| fit_penalty(slot.pos, c.pos) <= 2).count();
             let needed = slots.iter().filter(|s| fit_penalty(slot.pos, s.pos) <= 2).count();
             if covered < needed {
                 let n = free_num(&squad);
-                squad.push(filler(slot.pos, n, club.rating));
+                squad.push(filler(&mut rng, slot.pos, n, club.rating, &squad));
             }
         }
         let pad = [Pos::CB, Pos::CM, Pos::ST, Pos::RB, Pos::LB, Pos::LW, Pos::CDM];
         let mut k = 0;
         while squad.len() < 18 {
             let n = free_num(&squad);
-            squad.push(filler(pad[k % pad.len()], n, club.rating));
+            squad.push(filler(&mut rng, pad[k % pad.len()], n, club.rating, &squad));
             k += 1;
         }
 
