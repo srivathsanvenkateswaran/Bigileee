@@ -79,6 +79,8 @@ fn whistle_long() -> Vec<f32> {
 /// through a resonant formant filter) chopped into syllables, summed and gently filtered. This
 /// reads as a murmuring crowd rather than static.
 fn crowd_noise(seed: u32, secs: f32, voices: usize, excitement: f32, mut env: impl FnMut(f32) -> f32) -> Vec<f32> {
+    // Calm crowds are voiced murmur only; excited ones add a little breath for the roar.
+    let breath_mix = 0.15 * excitement;
     let n = (secs * SR as f32) as usize;
     let mut out = vec![0.0f32; n];
     let mut rng = Noise(seed);
@@ -92,14 +94,14 @@ fn crowd_noise(seed: u32, secs: f32, voices: usize, excitement: f32, mut env: im
         let gain = uniform(0.5, 1.0);
         // State-variable band-pass around the formant.
         let f = 2.0 * (std::f32::consts::PI * formant / SR as f32).sin();
-        let q = 0.25;
+        let q = 0.12;
         let (mut low, mut band) = (0.0f32, 0.0f32);
         let mut saw = uniform(0.0, 1.0);
         let mut breath = Noise(seed.wrapping_mul(31).wrapping_add((pitch * 10.0) as u32) | 1);
         for (i, o) in out.iter_mut().enumerate() {
             let t = i as f32 / SR as f32;
             saw = (saw + pitch * (1.0 + 0.02 * (TAU * 5.0 * t).sin()) / SR as f32).fract();
-            let input = (saw * 2.0 - 1.0) * 0.6 + breath.next() * 0.4;
+            let input = (saw * 2.0 - 1.0) * (1.0 - breath_mix) + breath.next() * breath_mix;
             let high = input - low - q * band;
             band += f * high;
             low += f * band;
@@ -112,7 +114,7 @@ fn crowd_noise(seed: u32, secs: f32, voices: usize, excitement: f32, mut env: im
     // Soften the top end, drop rumble, normalise, then shape.
     let (mut lp, mut hp_in, mut hp) = (0.0f32, 0.0f32, 0.0f32);
     for o in out.iter_mut() {
-        lp += (*o - lp) * 0.35;
+        lp += (*o - lp) * 0.16;
         hp = 0.995 * (hp + lp - hp_in);
         hp_in = lp;
         *o = hp;

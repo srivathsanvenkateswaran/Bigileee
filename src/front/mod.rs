@@ -56,6 +56,8 @@ pub struct Settings {
     pub level: usize,
     pub camera: CamMode,
     pub commentary: bool,
+    /// Index into `CROWD_LEVELS`.
+    pub crowd: usize,
     pub flow: Flow,
     /// Side the human plays when facing the CPU.
     pub human_team: usize,
@@ -80,6 +82,7 @@ impl Settings {
             level: 2,
             camera: CamMode::Broadcast,
             commentary: true,
+            crowd: 1,
             flow: Flow::Friendly,
             human_team: 0,
             knockout: false,
@@ -141,6 +144,31 @@ impl TacticsUi {
 
 pub const PAUSE_ITEMS: [&str; 6] = ["Resume", "Substitutions", "Tactics", "Commentary", "Restart match", "Quit to menu"];
 
+/// Crowd ambience levels (label, linear volume).
+pub const CROWD_LEVELS: [(&str, f32); 4] = [("Off", 0.0), ("Low", 0.07), ("Medium", 0.13), ("High", 0.22)];
+
+#[derive(Component)]
+pub struct CrowdLoop;
+
+/// V cycles the crowd level during a match.
+fn crowd_volume(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut settings: ResMut<Settings>,
+    mut sinks: Query<&mut AudioSink, With<CrowdLoop>>,
+    res: Option<ResMut<MatchRes>>,
+) {
+    if keys.just_pressed(KeyCode::KeyV) {
+        settings.crowd = (settings.crowd + 1) % CROWD_LEVELS.len();
+        if let Some(mut res) = res {
+            let label = CROWD_LEVELS[settings.crowd].0;
+            res.m.banner = Some((format!("CROWD VOLUME  ·  {}", label.to_uppercase()), 1.2));
+        }
+    }
+    for mut sink in &mut sinks {
+        sink.set_volume(Volume::Linear(CROWD_LEVELS[settings.crowd].1));
+    }
+}
+
 #[derive(Resource)]
 pub struct Fonts {
     pub bold: Handle<Font>,
@@ -175,6 +203,7 @@ impl Plugin for GamePlugin {
                 h.screen = career::Screen::Main;
             }))
             .add_systems(Update, (career::hub_input, career::draw_hub).chain().run_if(in_state(AppState::Hub)))
+            .add_systems(Update, crowd_volume.run_if(in_state(AppState::Match)))
             .add_systems(OnEnter(AppState::Match), setup_match)
             .add_systems(OnExit(AppState::Match), teardown_match)
             .add_systems(
@@ -258,7 +287,8 @@ fn setup_match(
     hud::spawn_hud(&mut commands, &fonts, &mut images, &res);
     commands.spawn((
         AudioPlayer::new(sounds.crowd.clone()),
-        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.16)),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(CROWD_LEVELS[settings.crowd].1)),
+        CrowdLoop,
         StateScoped(AppState::Match),
     ));
     *replay = Replay::default();

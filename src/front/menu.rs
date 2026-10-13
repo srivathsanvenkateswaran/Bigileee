@@ -157,7 +157,7 @@ pub fn draw_title(mut commands: Commands, fonts: Res<Fonts>, mut menu: ResMut<Me
 
 // ---------- setup ----------
 
-const ROWS: usize = 9;
+const ROWS: usize = 10;
 pub const START_ROW: usize = ROWS - 1;
 
 pub fn setup_input(
@@ -209,6 +209,7 @@ pub fn setup_input(
             5 => settings.level = cycle(settings.level, LEVELS.len()),
             6 => settings.camera = CamMode::ALL[cycle(CamMode::ALL.iter().position(|c| *c == settings.camera).unwrap_or(0), 3)],
             7 => settings.commentary = !settings.commentary,
+            8 => settings.crowd = cycle(settings.crowd, super::CROWD_LEVELS.len()),
             _ => {}
         }
         if menu.row <= 3 {
@@ -340,6 +341,7 @@ pub fn draw_setup(
                 ("CPU level", LEVELS[settings.level].0.to_string()),
                 ("Camera", settings.camera.label().to_string()),
                 ("Commentary", if settings.commentary { "On".to_string() } else { "Off".to_string() }),
+                ("Crowd", super::CROWD_LEVELS[settings.crowd].0.to_string()),
             ];
             c.spawn(Node { column_gap: Val::Px(26.0), ..default() }).with_children(|o| {
                 for (k, (label, value)) in opts.iter().enumerate() {

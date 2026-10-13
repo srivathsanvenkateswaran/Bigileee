@@ -200,7 +200,7 @@ pub fn spawn_hud(commands: &mut Commands, fonts: &Fonts, images: &mut Assets<Ima
     let hint = if m.humans.len() == 2 {
         "P1: WASD  J pass  I through  L lob  K shoot  LShift sprint  Q switch  E jockey     P2: arrows  , ; / .  RShift  M  N     Esc pause"
     } else {
-        "WASD move  Shift sprint  J pass  I through  L lob/cross  K shoot (hold)  |  defending: K tackle  L slide  E jockey  Q switch  |  C camera  Esc pause"
+        "WASD move  Shift sprint  J pass  I through  L lob/cross  K shoot (hold)  |  defending: K tackle  L slide  E jockey  Q switch  |  C camera  V crowd  Esc pause"
     };
     commands.spawn((
         Node { position_type: PositionType::Absolute, left: Val::Px(20.0), bottom: Val::Px(6.0), ..default() },
