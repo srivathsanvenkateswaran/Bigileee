@@ -610,6 +610,15 @@ pub struct Motion {
     pub routine: Option<(usize, f32)>,
     /// Strikes the ball with the left foot.
     pub left_footed: bool,
+    /// Normalised turn rate (-1 hard left .. 1 hard right in body terms), for leaning.
+    pub turn: f32,
+    pub dribbling: bool,
+    /// 0..1 progress through a first touch / header.
+    pub first_touch: Option<f32>,
+    pub header: Option<f32>,
+    pub throw_in: bool,
+    /// A keeper set and ready while play is near his goal.
+    pub keeper_ready: bool,
 }
 
 pub fn pose(m: Motion) -> Pose {
@@ -732,6 +741,65 @@ pub fn pose(m: Motion) -> Pose {
     }
     if let Some((kind, t)) = m.routine {
         routine(&mut p, kind, t);
+    }
+    // Lean into turns, more at speed.
+    if m.turn.abs() > 0.02 {
+        p.rot[HIPS] = rz(m.turn * 0.35 * (0.3 + run)) * p.rot[HIPS];
+        p.rot[HEAD] = rz(-m.turn * 0.2) * p.rot[HEAD];
+    }
+    // Dribbling: head over the ball, a slightly more crouched, shorter-striding action.
+    if m.dribbling && m.kick.is_none() {
+        p.rot[SPINE] = rx(0.12) * p.rot[SPINE];
+        p.rot[HEAD] = rx(0.3) * p.rot[HEAD];
+        p.hip_y -= 0.02;
+    }
+    if let Some(s) = m.first_touch.filter(|s| *s < 1.0) {
+        // Lift the receiving foot and cushion the ball down.
+        let lift = (s * std::f32::consts::PI).sin();
+        let (thigh, shin, foot) = if m.left_footed { (THIGH_L, SHIN_L, FOOT_L) } else { (THIGH_R, SHIN_R, FOOT_R) };
+        p.rot[thigh] = rx(0.55 * lift);
+        p.rot[shin] = rx(-0.55 * lift - 0.1);
+        p.rot[foot] = rx(0.45 * lift);
+        p.rot[HEAD] = rx(0.35);
+    }
+    if let Some(s) = m.header.filter(|s| *s < 1.0) {
+        // Leap, arch back, then snap the head through the ball.
+        let up = (s * std::f32::consts::PI).sin();
+        p.hip_y += 0.38 * up;
+        p.rot[SPINE] = rx(if s < 0.45 { -0.35 * (s / 0.45) } else { -0.35 + 0.95 * ((s - 0.45) / 0.55) });
+        p.rot[HEAD] = rx(if s < 0.45 { -0.3 } else { 0.4 });
+        p.rot[ARM_L] = rz(-1.1) * rx(0.3);
+        p.rot[ARM_R] = rz(1.1) * rx(0.3);
+        p.rot[THIGH_L] = rx(0.25 * up);
+        p.rot[THIGH_R] = rx(0.1 * up);
+        p.rot[SHIN_L] = rx(-0.9 * up);
+        p.rot[SHIN_R] = rx(-0.6 * up);
+    }
+    if m.throw_in {
+        // Ball held behind the head, back arched.
+        p.rot[ARM_L] = rz(-2.75) * rx(-0.45);
+        p.rot[ARM_R] = rz(2.75) * rx(-0.45);
+        p.rot[FOREARM_L] = rx(1.5);
+        p.rot[FOREARM_R] = rx(1.5);
+        p.rot[SPINE] = rx(-0.25);
+        p.rot[HEAD] = rx(-0.1);
+    }
+    if m.keeper_ready && m.dive.is_none() && !m.holding && m.speed < 2.5 {
+        // Set position: knees bent, weight forward, hands out.
+        p.hip_y = 0.8;
+        p.rot[HIPS] = rx(0.2);
+        p.rot[SPINE] = rx(0.25);
+        for (thigh, shin, foot) in [(THIGH_L, SHIN_L, FOOT_L), (THIGH_R, SHIN_R, FOOT_R)] {
+            p.rot[thigh] = rx(0.55);
+            p.rot[shin] = rx(-1.0);
+            p.rot[foot] = rx(0.3);
+        }
+        p.rot[THIGH_L] = rz(0.12) * p.rot[THIGH_L];
+        p.rot[THIGH_R] = rz(-0.12) * p.rot[THIGH_R];
+        p.rot[ARM_L] = rz(-0.55) * rx(0.55);
+        p.rot[ARM_R] = rz(0.55) * rx(0.55);
+        p.rot[FOREARM_L] = rx(0.45);
+        p.rot[FOREARM_R] = rx(0.45);
     }
     if m.stunned && !m.sliding && m.dive.is_none() {
         p.rot[SPINE] = rz((m.time * 11.0).sin() * 0.1) * rx(0.35);

@@ -25,6 +25,13 @@ pub struct Rig {
     left_foot: bool,
     phase: f32,
     joints: [Entity; JOINTS],
+    /// Smoothed yaw rate, for leaning into turns.
+    turn: f32,
+    last_yaw: f32,
+    had_ball: bool,
+    /// Seconds since the last first touch / header, if one is playing.
+    touch: Option<f32>,
+    header: Option<f32>,
 }
 
 /// Referee (0) and the two assistants (1 near touchline / right half, 2 far touchline / left half).
@@ -299,7 +306,18 @@ fn spawn_player(commands: &mut Commands, materials: &mut Assets<StandardMaterial
     let sponsor = (!keeper).then(|| kit.sponsors[t].clone());
     let fig = dress(commands, materials, images, kit, look, seed, keeper, Some((&p.name, p.num, fg)), sponsor, bio, p.pos);
     let left_foot = bio.is_some_and(|b| b.left_foot);
-    commands.entity(fig.root).insert(Rig { idx: i, card: p.card, left_foot, phase: (seed % 100) as f32 / 100.0, joints: fig.joints });
+    commands.entity(fig.root).insert(Rig {
+        idx: i,
+        card: p.card,
+        left_foot,
+        phase: (seed % 100) as f32 / 100.0,
+        joints: fig.joints,
+        turn: 0.0,
+        last_yaw: 0.0,
+        had_ball: false,
+        touch: None,
+        header: None,
+    });
 }
 
 /// Rebuilds a figure when a substitution changes who is in that position.
@@ -354,6 +372,7 @@ fn motion(p: &PlayerView, phase: f32, t: f32, look: f32) -> Motion {
         flag_up: false,
         routine: None,
         left_footed: false,
+        ..default()
     }
 }
 
@@ -375,8 +394,45 @@ pub fn animate_players(
         let target = yaw(p.facing);
         tf.rotation = tf.rotation.slerp(target, (dt * 16.0).min(1.0));
         let look = look_at(tf.rotation, p.pos, view.ball.pos);
+
+        // Turning: smoothed yaw rate drives a lean into the turn.
+        let yaw_now = (-p.facing.x).atan2(-p.facing.y);
+        let mut d = yaw_now - rig.last_yaw;
+        if d > PI {
+            d -= 2.0 * PI;
+        } else if d < -PI {
+            d += 2.0 * PI;
+        }
+        rig.last_yaw = yaw_now;
+        let rate = if dt > 0.0 { (d / dt).clamp(-6.0, 6.0) } else { 0.0 };
+        rig.turn += (rate - rig.turn) * (dt * 8.0).min(1.0);
+
+        // A first touch cushions the ball as it arrives; a kick with the ball up high is a header.
+        if p.has_ball && !rig.had_ball {
+            rig.touch = Some(0.0);
+        }
+        rig.had_ball = p.has_ball;
+        if p.kick > 0.3 && rig.header.is_none() && view.ball.z > 0.9 && view.ball.pos.distance(p.pos) < 2.5 {
+            rig.header = Some(0.0);
+        }
+        let r = &mut *rig;
+        for timer in [&mut r.touch, &mut r.header] {
+            if let Some(s) = timer {
+                *s += dt;
+                if *s > 0.45 {
+                    *timer = None;
+                }
+            }
+        }
+
         let mut mo = motion(p, rig.phase, t + rig.idx as f32, look);
         mo.left_footed = rig.left_foot;
+        mo.turn = rig.turn / 6.0;
+        mo.dribbling = p.has_ball;
+        mo.first_touch = rig.touch.map(|s| s / 0.3);
+        mo.header = rig.header.map(|s| s / 0.45);
+        mo.throw_in = p.throw_in;
+        mo.keeper_ready = p.keeper && !p.holding && speed < 2.5 && view.ball.pos.distance(p.pos) < 30.0;
         if let Some((_, kind, ct)) = view.celebration.filter(|c| c.0 == rig.idx) {
             mo.routine = Some((kind, ct));
             if kind == 4 && ct > 1.2 {

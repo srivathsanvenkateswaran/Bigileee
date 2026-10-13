@@ -17,6 +17,10 @@ pub struct PlayerView {
     pub holding: bool,
     pub celebrating: bool,
     pub sent_off: bool,
+    pub has_ball: bool,
+    /// Taking a throw-in (ball held overhead).
+    pub throw_in: bool,
+    pub keeper: bool,
 }
 
 #[derive(Clone, Default)]
@@ -59,6 +63,9 @@ impl View {
                     holding: p.role == Role::Gk && m.ball.owner == Some(i),
                     celebrating: celebrating == Some(p.team) && p.role != Role::Gk,
                     sent_off: p.sent_off,
+                    has_ball: m.ball.owner == Some(i),
+                    throw_in: m.lock.is_some_and(|l| l.taker == i && l.kind == crate::sim::game::Restart::ThrowIn),
+                    keeper: p.role == Role::Gk,
                 })
                 .collect(),
             ball: BallView { pos: m.ball.pos, z: m.ball.z, vel: m.ball.vel },
