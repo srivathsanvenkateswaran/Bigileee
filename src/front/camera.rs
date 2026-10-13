@@ -4,10 +4,14 @@ use super::stadium::sim_to_world;
 use super::view::View;
 use super::AppState;
 use crate::sim::consts::*;
-use bevy::core_pipeline::bloom::Bloom;
+use super::stadium::TimeOfDay;
+use bevy::core_pipeline::bloom::{Bloom, BloomCompositeMode};
+use bevy::core_pipeline::experimental::taa::TemporalAntiAliasing;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::pbr::{Atmosphere, AtmosphereSettings, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel, ShadowFilteringMethod};
 use bevy::prelude::*;
 use bevy::render::camera::PerspectiveProjection;
+use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum CamMode {
@@ -34,19 +38,56 @@ pub struct MainCam {
     eye: Vec3,
 }
 
-pub fn spawn_camera(commands: &mut Commands) {
+/// Spawns the match camera with the broadcast look: HDR, TAA (so MSAA is off), SSAO, a gentle
+/// bloom and a colour grade. Day matches also get Bevy's procedural atmosphere for the sky.
+pub fn spawn_camera(commands: &mut Commands, time_of_day: TimeOfDay) {
     let eye = Vec3::new(0.0, 24.0, 50.0);
-    commands.spawn((
+    let night = time_of_day == TimeOfDay::Night;
+    let mut cam = commands.spawn((
         Camera3d::default(),
         Camera { hdr: true, ..default() },
         Projection::Perspective(PerspectiveProjection { fov: 30f32.to_radians(), far: 600.0, ..default() }),
         Tonemapping::TonyMcMapface,
-        Bloom::NATURAL,
-        Msaa::Sample4,
+        Bloom {
+            intensity: if night { 0.14 } else { 0.06 },
+            low_frequency_boost: 0.5,
+            composite_mode: BloomCompositeMode::EnergyConserving,
+            ..Bloom::NATURAL
+        },
+        broadcast_grade(night),
+        Msaa::Off,
+        TemporalAntiAliasing::default(),
+        ScreenSpaceAmbientOcclusion {
+            quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Low,
+            constant_object_thickness: 0.5,
+        },
+        ShadowFilteringMethod::Temporal,
         Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y),
         MainCam { focus: Vec3::ZERO, eye },
         StateScoped(AppState::Match),
     ));
+    if !night {
+        cam.insert((
+            Atmosphere::EARTH,
+            AtmosphereSettings { aerial_view_lut_max_distance: 2.0e3, scene_units_to_m: 1.0, ..default() },
+        ));
+    }
+}
+
+/// TV-style grade: slightly warm, punchier midtones, a little extra saturation, lifted shadows
+/// so the shaded side of the pitch keeps its colour.
+fn broadcast_grade(night: bool) -> ColorGrading {
+    ColorGrading {
+        global: ColorGradingGlobal {
+            exposure: if night { 0.1 } else { 0.0 },
+            temperature: if night { -0.04 } else { 0.03 },
+            post_saturation: 1.0,
+            ..default()
+        },
+        shadows: ColorGradingSection { saturation: 1.05, contrast: 1.0, lift: 0.004, ..default() },
+        midtones: ColorGradingSection { saturation: 1.02, contrast: 1.08, ..default() },
+        highlights: ColorGradingSection { saturation: 1.0, gain: 1.02, ..default() },
+    }
 }
 
 pub fn update_camera(

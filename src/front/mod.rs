@@ -204,6 +204,7 @@ impl Plugin for GamePlugin {
             }))
             .add_systems(Update, (career::hub_input, career::draw_hub).chain().run_if(in_state(AppState::Hub)))
             .add_systems(Update, crowd_volume.run_if(in_state(AppState::Match)))
+            .add_plugins(stadium::StadiumPlugin)
             .add_systems(OnEnter(AppState::Match), setup_match)
             .add_systems(OnExit(AppState::Match), teardown_match)
             .add_systems(
@@ -268,6 +269,7 @@ fn setup_match(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::render::mesh::skinning::SkinnedMeshInverseBindposes>>,
     mut replay: ResMut<Replay>,
+    time_of_day: Res<stadium::TimeOfDay>,
 ) {
     let cfg = MatchConfig {
         mode: settings.mode,
@@ -278,9 +280,9 @@ fn setup_match(
     };
     let m = Match::new(cfg, [settings.home_team.clone(), settings.away_team.clone()]);
     let league = data::leagues()[settings.home.0].name.to_uppercase();
-    stadium::spawn_stadium(&mut commands, &mut meshes, &mut materials, &mut images, m.kit[0], m.kit[1], &league);
+    stadium::spawn_stadium(&mut commands, &mut meshes, &mut materials, &mut images, &m, &league, *time_of_day);
     players::spawn_players(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, &m);
-    camera::spawn_camera(&mut commands);
+    camera::spawn_camera(&mut commands, *time_of_day);
     let res = MatchRes { m, sfx: Sfx::default(), paused: false, pause_sel: 0, subs: None, tactics: None };
     let mut talk = commentary::Commentary::new();
     talk.enabled = settings.commentary;
