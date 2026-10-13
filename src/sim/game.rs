@@ -155,6 +155,8 @@ pub struct MatchConfig {
     pub difficulty: f32,
     /// Cup ties go to penalties if level at full time.
     pub knockout: bool,
+    /// Which side the single human plays in `Mode::VsCpu`.
+    pub human_team: usize,
 }
 
 pub struct Human {
@@ -264,7 +266,7 @@ impl Match {
 
         let mut humans = Vec::new();
         match cfg.mode {
-            Mode::VsCpu => humans.push(Human::new(0, 10)),
+            Mode::VsCpu => humans.push(Human::new(cfg.human_team, cfg.human_team * PER_TEAM + 10)),
             Mode::TwoPlayer => {
                 humans.push(Human::new(0, 10));
                 humans.push(Human::new(1, PER_TEAM + 10));
@@ -273,6 +275,7 @@ impl Match {
         }
 
         let skill = match cfg.mode {
+            Mode::VsCpu if cfg.human_team == 1 => [cfg.difficulty, 0.6],
             Mode::VsCpu => [0.6, cfg.difficulty],
             Mode::TwoPlayer => [0.6, 0.6],
             Mode::Watch => [cfg.difficulty, cfg.difficulty],
@@ -1874,7 +1877,7 @@ mod tests {
             let a = club("Home", 70 + seed as u8 * 3, formations[seed as usize % 6]);
             let b = club("Away", 85 - seed as u8 * 3, formations[(seed as usize + 2) % 6]);
             let teams = [TeamSetup::from_club(&a), TeamSetup::from_club(&b)];
-            let cfg = MatchConfig { mode: Mode::Watch, half_secs: 180.0, difficulty: 0.6, knockout: true };
+            let cfg = MatchConfig { mode: Mode::Watch, half_secs: 180.0, difficulty: 0.6, knockout: true, human_team: 0 };
             let mut m = Match::new(cfg, teams);
             let sfx = Sfx::default();
             let mut was_setpiece = false;

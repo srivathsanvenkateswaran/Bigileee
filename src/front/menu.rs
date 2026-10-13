@@ -3,7 +3,7 @@
 use super::camera::CamMode;
 use super::hud::text;
 use super::textures::{self, color};
-use super::{AppState, Fonts, Settings};
+use super::{AppState, Flow, Fonts, Settings};
 use crate::data;
 use crate::sim::game::Mode;
 use crate::sim::squad::TeamSetup;
@@ -52,7 +52,14 @@ fn nav(keys: &ButtonInput<KeyCode>, pads: &Query<&Gamepad>) -> Nav {
 
 // ---------- title ----------
 
-const TITLE_ITEMS: [&str; 4] = ["Kick Off  (vs CPU)", "2 Players  (same Mac)", "Watch CPU vs CPU", "Quit"];
+fn title_items() -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if super::career::save_path().exists() {
+        v.push("Continue Career");
+    }
+    v.extend(["Kick Off  (vs CPU)", "Season", "Cup", "2 Players  (same Mac)", "Watch CPU vs CPU", "Quit"]);
+    v
+}
 
 pub fn title_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -61,9 +68,11 @@ pub fn title_input(
     mut settings: ResMut<Settings>,
     mut next: ResMut<NextState<AppState>>,
     mut exit: EventWriter<AppExit>,
+    mut commands: Commands,
 ) {
     let n = nav(&keys, &pads);
-    let len = TITLE_ITEMS.len();
+    let items = title_items();
+    let len = items.len();
     if n.up {
         menu.row = (menu.row + len - 1) % len;
         menu.dirty = true;
@@ -73,14 +82,33 @@ pub fn title_input(
         menu.dirty = true;
     }
     if n.ok {
-        match menu.row {
-            0 => settings.mode = Mode::VsCpu,
-            1 => settings.mode = Mode::TwoPlayer,
-            2 => settings.mode = Mode::Watch,
-            _ => {
+        settings.flow = Flow::Friendly;
+        settings.human_team = 0;
+        settings.knockout = false;
+        settings.career_fixture = None;
+        match items[menu.row.min(len - 1)] {
+            "Continue Career" => {
+                if let Some(c) = super::career::Career::load() {
+                    commands.insert_resource(c);
+                    next.set(AppState::Hub);
+                }
+                return;
+            }
+            "Season" => {
+                settings.flow = Flow::Season;
+                settings.mode = Mode::VsCpu;
+            }
+            "Cup" => {
+                settings.flow = Flow::Cup;
+                settings.mode = Mode::VsCpu;
+            }
+            "2 Players  (same Mac)" => settings.mode = Mode::TwoPlayer,
+            "Watch CPU vs CPU" => settings.mode = Mode::Watch,
+            "Quit" => {
                 exit.write(AppExit::Success);
                 return;
             }
+            _ => settings.mode = Mode::VsCpu,
         }
         menu.row = START_ROW;
         next.set(AppState::Setup);
@@ -114,7 +142,7 @@ pub fn draw_title(mut commands: Commands, fonts: Res<Fonts>, mut menu: ResMut<Me
             c.spawn(text(&fonts, "BIGILEEE 22", 104.0, Color::WHITE));
             c.spawn(text(&fonts, "The parody football game  ·  KaalPanthu engine", 24.0, GOLD));
             c.spawn(Node { height: Val::Px(40.0), ..default() });
-            for (k, item) in TITLE_ITEMS.iter().enumerate() {
+            for (k, item) in title_items().iter().enumerate() {
                 let sel = menu.row == k;
                 c.spawn((
                     Node { width: Val::Px(420.0), padding: UiRect::axes(Val::Px(24.0), Val::Px(12.0)), justify_content: JustifyContent::Center, ..default() },
@@ -133,6 +161,7 @@ const ROWS: usize = 9;
 pub const START_ROW: usize = ROWS - 1;
 
 pub fn setup_input(
+    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     mut menu: ResMut<MenuState>,
@@ -145,12 +174,20 @@ pub fn setup_input(
         next.set(AppState::Title);
         return;
     }
+    let career = settings.flow != Flow::Friendly;
+    let skip = |r: usize| career && (r == 2 || r == 3);
     if n.up {
         menu.row = (menu.row + ROWS - 1) % ROWS;
+        while skip(menu.row) {
+            menu.row = (menu.row + ROWS - 1) % ROWS;
+        }
         menu.dirty = true;
     }
     if n.down {
         menu.row = (menu.row + 1) % ROWS;
+        while skip(menu.row) {
+            menu.row = (menu.row + 1) % ROWS;
+        }
         menu.dirty = true;
     }
     let d: i32 = if n.right { 1 } else if n.left { -1 } else { 0 };
@@ -178,6 +215,15 @@ pub fn setup_input(
             settings.refresh_teams();
         }
         menu.dirty = true;
+    }
+    if n.ok && (menu.row == ROWS - 1 || keys.just_pressed(KeyCode::Enter)) && career {
+        use super::career::{Career, ClubRef};
+        let user = ClubRef { league: settings.home.0, club: settings.home.1 };
+        let c = if settings.flow == Flow::Season { Career::new_season(user) } else { Career::new_cup(user) };
+        c.save();
+        commands.insert_resource(c);
+        next.set(AppState::Hub);
+        return;
     }
     if n.ok && (menu.row == ROWS - 1 || keys.just_pressed(KeyCode::Enter)) {
         if settings.home == settings.away {
@@ -271,17 +317,23 @@ pub fn draw_setup(
             StateScoped(AppState::Setup),
         ))
         .with_children(|c| {
-            let mode = match settings.mode {
-                Mode::VsCpu => "KICK OFF",
-                Mode::TwoPlayer => "2 PLAYERS",
-                Mode::Watch => "CPU vs CPU",
+            let mode = match (settings.flow, settings.mode) {
+                (Flow::Season, _) => "SEASON  ·  choose your club",
+                (Flow::Cup, _) => "CUP  ·  choose your club",
+                (_, Mode::VsCpu) => "KICK OFF",
+                (_, Mode::TwoPlayer) => "2 PLAYERS",
+                (_, Mode::Watch) => "CPU vs CPU",
             };
             c.spawn(text(&fonts, mode, 40.0, Color::WHITE));
             c.spawn(Node { column_gap: Val::Px(30.0), align_items: AlignItems::Center, ..default() }).with_children(|teams| {
                 let (hl, al) = (leagues[settings.home.0].name, leagues[settings.away.0].name);
-                team_card(teams, &fonts, &mut images, &settings.home_team, hl, "HOME", [row == 0, row == 1]);
-                teams.spawn(text(&fonts, "VS", 34.0, GOLD));
-                team_card(teams, &fonts, &mut images, &settings.away_team, al, "AWAY", [row == 2, row == 3]);
+                if settings.flow != Flow::Friendly {
+                    team_card(teams, &fonts, &mut images, &settings.home_team, hl, "YOUR CLUB", [row == 0, row == 1]);
+                } else {
+                    team_card(teams, &fonts, &mut images, &settings.home_team, hl, "HOME", [row == 0, row == 1]);
+                    teams.spawn(text(&fonts, "VS", 34.0, GOLD));
+                    team_card(teams, &fonts, &mut images, &settings.away_team, al, "AWAY", [row == 2, row == 3]);
+                }
             });
             let opts = [
                 ("Half length", HALVES[settings.half].0.to_string()),
@@ -308,7 +360,7 @@ pub fn draw_setup(
                 Node { padding: UiRect::axes(Val::Px(44.0), Val::Px(12.0)), ..default() },
                 BackgroundColor(if sel { GOLD } else { Color::srgba(0.97, 0.78, 0.25, 0.35) }),
             ))
-            .with_child(text(&fonts, "PLAY MATCH", 30.0, Color::BLACK));
+            .with_child(text(&fonts, if settings.flow == Flow::Friendly { "PLAY MATCH" } else { "START" }, 30.0, Color::BLACK));
             c.spawn(text(
                 &fonts,
                 "Up/Down choose  ·  Left/Right change  ·  Enter play  ·  Esc back      * = generated squad filler",

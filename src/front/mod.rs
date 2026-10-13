@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod camera;
+pub mod career;
 pub mod commentary;
 pub mod controls;
 pub mod font5x7;
@@ -29,6 +30,16 @@ pub enum AppState {
     Title,
     Setup,
     Match,
+    Hub,
+}
+
+/// What the setup screen is choosing for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Flow {
+    #[default]
+    Friendly,
+    Season,
+    Cup,
 }
 
 /// Choices made in the menus. Team setups are cached so their XIs stay stable while browsing.
@@ -42,6 +53,12 @@ pub struct Settings {
     pub level: usize,
     pub camera: CamMode,
     pub commentary: bool,
+    pub flow: Flow,
+    /// Side the human plays when facing the CPU.
+    pub human_team: usize,
+    pub knockout: bool,
+    /// The career fixture being played, if this match belongs to a season or cup.
+    pub career_fixture: Option<usize>,
     pub home_team: TeamSetup,
     pub away_team: TeamSetup,
 }
@@ -60,6 +77,10 @@ impl Settings {
             level: 2,
             camera: CamMode::Broadcast,
             commentary: true,
+            flow: Flow::Friendly,
+            human_team: 0,
+            knockout: false,
+            career_fixture: None,
             home_team: TeamSetup::from_club(&l[home.0].clubs[home.1]),
             away_team: TeamSetup::from_club(&l[away.0].clubs[away.1]),
         }
@@ -125,6 +146,9 @@ impl Plugin for GamePlugin {
             .add_systems(OnEnter(AppState::Setup), (mark_dirty, menu_camera::<1>))
             .add_systems(Update, (menu::title_input, menu::draw_title).chain().run_if(in_state(AppState::Title)))
             .add_systems(Update, (menu::setup_input, menu::draw_setup).chain().run_if(in_state(AppState::Setup)))
+            .init_resource::<career::HubState>()
+            .add_systems(OnEnter(AppState::Hub), (menu_camera::<2>, |mut h: ResMut<career::HubState>| h.dirty = true))
+            .add_systems(Update, (career::hub_input, career::draw_hub).chain().run_if(in_state(AppState::Hub)))
             .add_systems(OnEnter(AppState::Match), setup_match)
             .add_systems(OnExit(AppState::Match), teardown_match)
             .add_systems(
@@ -148,7 +172,11 @@ impl Plugin for GamePlugin {
 
 /// Menus are pure UI, which still needs a camera to render through.
 fn menu_camera<const S: u8>(mut commands: Commands) {
-    let state = if S == 0 { AppState::Title } else { AppState::Setup };
+    let state = match S {
+        0 => AppState::Title,
+        1 => AppState::Setup,
+        _ => AppState::Hub,
+    };
     commands.spawn((Camera2d, StateScoped(state)));
 }
 
@@ -186,7 +214,8 @@ fn setup_match(
         mode: settings.mode,
         half_secs: menu::HALVES[settings.half].1,
         difficulty: menu::LEVELS[settings.level].1,
-        knockout: false,
+        knockout: settings.knockout,
+        human_team: settings.human_team,
     };
     let m = Match::new(cfg, [settings.home_team.clone(), settings.away_team.clone()]);
     let league = data::leagues()[settings.home.0].name.to_uppercase();
@@ -226,6 +255,7 @@ fn step_match(
     time: Res<Time>,
     sounds: Res<audio::Sounds>,
     mut talk: ResMut<commentary::Commentary>,
+    mut career: Option<ResMut<career::Career>>,
     mut next: ResMut<NextState<AppState>>,
 ) {
     let dt = time.delta_secs().min(1.0 / 30.0);
@@ -241,7 +271,15 @@ fn step_match(
 
     if res.m.phase == Phase::FullTime {
         if confirm || keys.just_pressed(KeyCode::Escape) {
-            next.set(AppState::Setup);
+            if let (Some(fx), Some(c)) = (settings.career_fixture.take(), career.as_mut()) {
+                let pens = res.m.shootout.as_ref().and_then(|s| s.winner);
+                c.record(fx, (res.m.score[0] as u8, res.m.score[1] as u8), pens);
+                c.finish_round();
+                c.save();
+                next.set(AppState::Hub);
+            } else {
+                next.set(AppState::Setup);
+            }
         }
         return;
     }
@@ -286,11 +324,16 @@ fn step_match(
                     talk.enabled = !talk.enabled;
                     settings.commentary = talk.enabled;
                 }
+                3 if settings.career_fixture.is_some() => next.set(AppState::Hub),
                 3 => {
                     // Re-enter the match state to rebuild everything from scratch.
                     next.set(AppState::Setup);
                     settings.mode = res.m.cfg.mode;
                     commands.insert_resource(menu::MenuState { row: menu::START_ROW, dirty: true });
+                }
+                _ if settings.career_fixture.is_some() => {
+                    settings.career_fixture = None;
+                    next.set(AppState::Hub);
                 }
                 _ => next.set(AppState::Title),
             }
@@ -411,6 +454,21 @@ fn snapshot(
         (1900, AppState::Match) => shot(&mut commands, "5_play"),
         (2700, AppState::Match) => shot(&mut commands, "6_play"),
         (2800, _) => {
+            let mut c = career::Career::new_season(career::ClubRef { league: 5, club: 3 });
+            for _ in 0..6 {
+                c.finish_round();
+            }
+            commands.insert_resource(c);
+            next.set(AppState::Hub);
+        }
+        (2900, _) => shot(&mut commands, "7_hub_season"),
+        (2910, _) => {
+            let mut c = career::Career::new_cup(career::ClubRef { league: 5, club: 3 });
+            c.finish_round();
+            commands.insert_resource(c);
+        }
+        (2990, _) => shot(&mut commands, "8_hub_cup"),
+        (3000, _) => {
             exit.write(AppExit::Success);
         }
         _ => {}

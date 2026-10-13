@@ -6,6 +6,8 @@ description = "A parody 3D football game for macOS, written in Rust"
 
 [dependencies]
 bevy = { version = "0.16", features = ["wav"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.dev]
 opt-level = 1
