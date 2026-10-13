@@ -37,8 +37,20 @@ geometric designs in club colours.
 
 ## Modes
 
-Kick Off (vs CPU, five difficulty levels), 2 Players on one Mac, and CPU vs
-CPU. Half length from 2 to 10 minutes.
+- **Kick Off**: one match against the CPU, five difficulty levels
+- **Season**: pick a club and play its league's full fixture list; other
+  results are simulated and the table updates as you go
+- **Cup**: the Bigileee Champions Cup, a 16-club knockout drawn from the
+  strongest clubs in every league plus yours, with penalty shootouts
+- **2 Players** on one Mac, and **CPU vs CPU**
+
+Season and Cup progress saves to `~/Library/Application Support/Bigileee22`
+and resumes from **Continue Career** on the title screen.
+
+Matches have offside, fouls, yellow and red cards, penalties, five
+substitutions (pause menu), fitness that drops over 90 minutes, goal
+replays, and spoken commentary using the Mac's built-in voices (toggle in
+setup or the pause menu).
 
 ## Controls
 
@@ -77,8 +89,9 @@ A or Enter.
 cargo test --release -- --nocapture
 ```
 
-Plays six CPU-vs-CPU matches headlessly across all formations, and checks
-every club builds a valid squad.
+Plays six CPU-vs-CPU knockout matches headlessly across all formations,
+checks every club builds a valid squad, and runs full seasons and a cup to a
+champion.
 
 `BIGILEEE_SNAPSHOT=/some/dir cargo run --release` walks through the menus,
 plays a CPU match and saves screenshots, then quits.
