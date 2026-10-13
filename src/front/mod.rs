@@ -7,6 +7,7 @@ pub mod commentary;
 pub mod controls;
 pub mod font5x7;
 pub mod hud;
+pub mod humanoid;
 pub mod menu;
 pub mod players;
 pub mod stadium;
@@ -156,6 +157,7 @@ impl Plugin for GamePlugin {
                 (
                     step_match,
                     players::animate_players,
+                    players::animate_officials,
                     players::animate_ball,
                     players::place_indicators,
                     camera::update_camera,
@@ -208,6 +210,7 @@ fn setup_match(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<bevy::render::mesh::skinning::SkinnedMeshInverseBindposes>>,
     mut replay: ResMut<Replay>,
 ) {
     let cfg = MatchConfig {
@@ -220,7 +223,7 @@ fn setup_match(
     let m = Match::new(cfg, [settings.home_team.clone(), settings.away_team.clone()]);
     let league = data::leagues()[settings.home.0].name.to_uppercase();
     stadium::spawn_stadium(&mut commands, &mut meshes, &mut materials, &mut images, m.kit[0], m.kit[1], &league);
-    players::spawn_players(&mut commands, &mut meshes, &mut materials, &mut images, &m);
+    players::spawn_players(&mut commands, &mut meshes, &mut materials, &mut images, &mut bindposes, &m);
     camera::spawn_camera(&mut commands);
     let res = MatchRes { m, sfx: Sfx::default(), paused: false, pause_sel: 0, subs: None };
     let mut talk = commentary::Commentary::new();
@@ -229,7 +232,7 @@ fn setup_match(
     hud::spawn_hud(&mut commands, &fonts, &mut images, &res);
     commands.spawn((
         AudioPlayer::new(sounds.crowd.clone()),
-        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.45)),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(0.16)),
         StateScoped(AppState::Match),
     ));
     *replay = Replay::default();
