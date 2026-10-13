@@ -179,6 +179,8 @@ pub fn spawn_stadium(
     let crowd_mat = materials.add(StandardMaterial {
         base_color_texture: Some(crowd),
         perceptual_roughness: 1.0,
+        cull_mode: None,
+        double_sided: true,
         ..default()
     });
     let concrete = materials.add(StandardMaterial { base_color: Color::srgb(0.32, 0.33, 0.37), perceptual_roughness: 0.9, ..default() });
@@ -188,8 +190,8 @@ pub fn spawn_stadium(
     let sides: [(Handle<Mesh>, Vec3, f32, f32); 4] = [
         (long.clone(), Vec3::new(0.0, 0.0, -(HALF_W + 9.0)), 0.0, HALF_L * 2.0 + 20.0),
         (long.clone(), Vec3::new(0.0, 0.0, HALF_W + 9.0), PI, HALF_L * 2.0 + 20.0),
-        (short.clone(), Vec3::new(-(HALF_L + 9.0), 0.0, 0.0), -FRAC_PI_2, HALF_W * 2.0 + 16.0),
-        (short.clone(), Vec3::new(HALF_L + 9.0, 0.0, 0.0), FRAC_PI_2, HALF_W * 2.0 + 16.0),
+        (short.clone(), Vec3::new(-(HALF_L + 9.0), 0.0, 0.0), FRAC_PI_2, HALF_W * 2.0 + 16.0),
+        (short.clone(), Vec3::new(HALF_L + 9.0, 0.0, 0.0), -FRAC_PI_2, HALF_W * 2.0 + 16.0),
     ];
     for (k, (mesh, at, yaw, len)) in sides.into_iter().enumerate() {
         let rot = Quat::from_rotation_y(yaw);
@@ -253,8 +255,8 @@ pub fn spawn_stadium(
     for (along, offset, yaw, len) in [
         (Vec3::X, Vec3::new(0.0, 0.0, -(HALF_W + 4.0)), 0.0, HALF_L * 2.0 + 6.0),
         (Vec3::X, Vec3::new(0.0, 0.0, HALF_W + 4.0), PI, HALF_L * 2.0 + 6.0),
-        (Vec3::Z, Vec3::new(-(HALF_L + 4.0), 0.0, 0.0), -FRAC_PI_2, HALF_W * 2.0),
-        (Vec3::Z, Vec3::new(HALF_L + 4.0, 0.0, 0.0), FRAC_PI_2, HALF_W * 2.0),
+        (Vec3::Z, Vec3::new(-(HALF_L + 4.0), 0.0, 0.0), FRAC_PI_2, HALF_W * 2.0),
+        (Vec3::Z, Vec3::new(HALF_L + 4.0, 0.0, 0.0), -FRAC_PI_2, HALF_W * 2.0),
     ] {
         let n = (len / board_w).floor() as i32;
         for i in 0..n {

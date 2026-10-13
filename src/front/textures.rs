@@ -238,3 +238,29 @@ pub fn crest(style: Crest, primary: u32, secondary: u32, size: u32) -> Image {
     }
     image(size, size, data, false, true)
 }
+
+/// A shirt texture for the torso capsule (u wraps around the body, v runs top to bottom), patterned
+/// after the club's crest style so kits read at a distance.
+pub fn kit(style: Crest, main: u32, accent: u32) -> Image {
+    let (w, h) = (64u32, 64u32);
+    let (a, b) = (rgb(main), rgb(accent));
+    let mut data = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+            let accent = match style {
+                Crest::Stripes => ((u * 12.0) as u32) % 2 == 1,
+                Crest::Hoops => (0.25..0.8).contains(&v) && ((v * 10.0) as u32) % 2 == 1,
+                Crest::Halves => u < 0.5,
+                Crest::Sash => ((u * 2.0 + v) % 1.0) < 0.18,
+                Crest::Chevron => (v - 0.35 - (u * 2.0 % 1.0 - 0.5).abs() * 0.3).abs() < 0.05,
+                Crest::Roundel | Crest::Shield => false,
+            };
+            // Collar and hem trims in the accent colour.
+            let trim = v < 0.06 || v > 0.94;
+            let c = if accent || trim { b } else { a };
+            data.extend_from_slice(&[c[0], c[1], c[2], 255]);
+        }
+    }
+    image(w, h, data, true, true)
+}

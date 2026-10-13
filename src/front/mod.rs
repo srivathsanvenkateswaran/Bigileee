@@ -451,7 +451,9 @@ fn snapshot(
         (140, _) => next.set(AppState::Match),
         (400, AppState::Match) => shot(&mut commands, "3_kickoff"),
         (1100, AppState::Match) => shot(&mut commands, "4_play"),
+        (1500, AppState::Match) => settings.camera = CamMode::Pro,
         (1900, AppState::Match) => shot(&mut commands, "5_play"),
+        (1950, AppState::Match) => settings.camera = CamMode::Broadcast,
         (2700, AppState::Match) => shot(&mut commands, "6_play"),
         (2800, _) => {
             let mut c = career::Career::new_season(career::ClubRef { league: 5, club: 3 });

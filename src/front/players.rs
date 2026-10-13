@@ -51,6 +51,11 @@ struct Parts {
     shin: Handle<Mesh>,
     boot: Handle<Mesh>,
     number: Handle<Mesh>,
+    neck: Handle<Mesh>,
+    collar: Handle<Mesh>,
+    hand: Handle<Mesh>,
+    band: Handle<Mesh>,
+    beard: Handle<Mesh>,
 }
 
 fn lum(c: u32) -> f32 {
@@ -77,6 +82,11 @@ pub fn spawn_players(
         shin: meshes.add(Capsule3d::new(0.058, 0.3)),
         boot: meshes.add(Cuboid::new(0.1, 0.08, 0.26)),
         number: meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.13, 0.11))),
+        neck: meshes.add(Cylinder::new(0.055, 0.12)),
+        collar: meshes.add(Torus::new(0.05, 0.085)),
+        hand: meshes.add(Sphere::new(0.05)),
+        band: meshes.add(Cylinder::new(0.066, 0.06)),
+        beard: meshes.add(Sphere::new(0.085)),
     };
     let mat = |materials: &mut Assets<StandardMaterial>, c: Color| {
         materials.add(StandardMaterial { base_color: c, perceptual_roughness: 0.75, ..default() })
@@ -89,13 +99,20 @@ pub fn spawn_players(
         .iter()
         .map(|&c| mat(materials, color(c)))
         .collect();
-    let boots = mat(materials, Color::srgb(0.08, 0.08, 0.1));
+    let boots: Vec<Handle<StandardMaterial>> = [0x141418u32, 0x141418, 0xF4F4F4, 0xFF5A1F, 0x23C4F0, 0xE8FF3A, 0xE0218A]
+        .iter()
+        .map(|&c| mat(materials, color(c)))
+        .collect();
 
     for t in 0..2 {
         let team = &m.teams[t];
         let shirt_c = m.kit[t];
         let trim_c = if shirt_c == team.home { team.trim } else { team.home };
-        let shirt = mat(materials, color(shirt_c));
+        let kit_img = images.add(textures::kit(team.crest, shirt_c, trim_c));
+        let shirt = materials.add(StandardMaterial { base_color_texture: Some(kit_img), perceptual_roughness: 0.75, ..default() });
+        let sleeves = mat(materials, color(shirt_c));
+        let trim = mat(materials, color(trim_c));
+        let gloves = mat(materials, color(0xE8FF3A));
         let keeper = mat(materials, color(team.keeper));
         let shorts_c = if (lum(shirt_c) - lum(trim_c)).abs() > 60.0 { trim_c } else if lum(shirt_c) > 128.0 { 0x15151A } else { 0xF2F2F2 };
         let shorts = mat(materials, color(shorts_c));
@@ -106,6 +123,7 @@ pub fn spawn_players(
             let p = &m.players[i];
             let gk = p.role == Role::Gk;
             let top = if gk { keeper.clone() } else { shirt.clone() };
+            let sleeve = if gk { keeper.clone() } else { sleeves.clone() };
             let seed = p.name.bytes().fold(7usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize));
             let skin = skins[seed % skins.len()].clone();
             let hair = hairs[(seed / 7) % hairs.len()].clone();
@@ -117,8 +135,15 @@ pub fn spawn_players(
                 ..default()
             });
 
+            // Heights vary a little; keepers and centre-backs run tall.
+            let tall = matches!(p.role, Role::Gk | Role::Def) as u8 as f32 * 0.03;
+            let height = 0.94 + (seed % 9) as f32 * 0.012 + tall;
             let root = commands
-                .spawn((Transform::from_translation(sim_to_world(p.pos, 0.0)), Visibility::default(), scoped.clone()))
+                .spawn((
+                    Transform::from_translation(sim_to_world(p.pos, 0.0)).with_scale(Vec3::splat(height)),
+                    Visibility::default(),
+                    scoped.clone(),
+                ))
                 .id();
             let hips = commands.spawn((Transform::from_xyz(0.0, 0.95, 0.0), Visibility::default(), ChildOf(root))).id();
             let piece = |commands: &mut Commands, mesh: &Handle<Mesh>, mat: &Handle<StandardMaterial>, parent: Entity, tf: Transform| {
@@ -127,22 +152,42 @@ pub fn spawn_players(
             piece(commands, &parts.torso, &top, hips, Transform::from_xyz(0.0, 0.33, 0.0).with_scale(Vec3::new(1.3, 1.0, 0.8)));
             piece(commands, &parts.shorts, &shorts, hips, Transform::from_xyz(0.0, 0.02, 0.0));
             piece(commands, &parts.head, &skin, hips, Transform::from_xyz(0.0, 0.76, 0.0));
-            piece(commands, &parts.hair, &hair, hips, Transform::from_xyz(0.0, 0.8, 0.015).with_scale(Vec3::new(1.0, 0.7, 1.0)));
+            piece(commands, &parts.neck, &skin, hips, Transform::from_xyz(0.0, 0.63, 0.0));
+            piece(commands, &parts.collar, if gk { &top } else { &trim }, hips, Transform::from_xyz(0.0, 0.6, 0.0));
+            // A handful of hairstyles: cropped, tall, long at the back, shaved, and a top knot.
+            match (seed / 11) % 6 {
+                0 | 1 => piece(commands, &parts.hair, &hair, hips, Transform::from_xyz(0.0, 0.8, 0.015).with_scale(Vec3::new(1.0, 0.7, 1.0))),
+                2 => piece(commands, &parts.hair, &hair, hips, Transform::from_xyz(0.0, 0.84, 0.0).with_scale(Vec3::new(1.12, 0.95, 1.12))),
+                3 => {
+                    piece(commands, &parts.hair, &hair, hips, Transform::from_xyz(0.0, 0.8, 0.02).with_scale(Vec3::new(1.05, 0.75, 1.05)));
+                    piece(commands, &parts.hair, &hair, hips, Transform::from_xyz(0.0, 0.7, 0.07).with_scale(Vec3::new(0.95, 1.0, 0.6)));
+                }
+                4 => {}
+                _ => {
+                    piece(commands, &parts.hair, &hair, hips, Transform::from_xyz(0.0, 0.8, 0.015).with_scale(Vec3::new(1.0, 0.65, 1.0)));
+                    piece(commands, &parts.hand, &hair, hips, Transform::from_xyz(0.0, 0.92, 0.05).with_scale(Vec3::splat(1.1)));
+                }
+            }
+            if (seed / 5) % 4 == 0 {
+                piece(commands, &parts.beard, &hair, hips, Transform::from_xyz(0.0, 0.7, -0.04).with_scale(Vec3::new(1.05, 0.7, 0.8)));
+            }
             piece(commands, &parts.number, &num_mat, hips, Transform::from_xyz(0.0, 0.38, 0.141));
 
             let limb = |commands: &mut Commands, at: Vec3| commands.spawn((Transform::from_translation(at), Visibility::default(), ChildOf(hips))).id();
             let arm_l = limb(commands, Vec3::new(-0.25, 0.55, 0.0));
             let arm_r = limb(commands, Vec3::new(0.25, 0.55, 0.0));
             for arm in [arm_l, arm_r] {
-                piece(commands, &parts.sleeve, &top, arm, Transform::from_xyz(0.0, -0.06, 0.0));
+                piece(commands, &parts.sleeve, &sleeve, arm, Transform::from_xyz(0.0, -0.06, 0.0));
                 piece(commands, &parts.arm, if gk { &top } else { &skin }, arm, Transform::from_xyz(0.0, -0.25, 0.0));
+                piece(commands, &parts.hand, if gk { &gloves } else { &skin }, arm, Transform::from_xyz(0.0, -0.47, 0.0).with_scale(Vec3::splat(if gk { 1.35 } else { 1.0 })));
             }
             let leg_l = limb(commands, Vec3::new(-0.1, -0.06, 0.0));
             let leg_r = limb(commands, Vec3::new(0.1, -0.06, 0.0));
             for leg in [leg_l, leg_r] {
                 piece(commands, &parts.thigh, &skin, leg, Transform::from_xyz(0.0, -0.22, 0.0));
                 piece(commands, &parts.shin, &socks, leg, Transform::from_xyz(0.0, -0.6, 0.0));
-                piece(commands, &parts.boot, &boots, leg, Transform::from_xyz(0.0, -0.85, -0.05));
+                piece(commands, &parts.band, &trim, leg, Transform::from_xyz(0.0, -0.44, 0.0));
+                piece(commands, &parts.boot, &boots[(seed / 3) % boots.len()], leg, Transform::from_xyz(0.0, -0.85, -0.05));
             }
             commands.entity(root).insert(Rig { idx: i, phase: (seed % 100) as f32 / 100.0, hips, leg_l, leg_r, arm_l, arm_r });
         }
