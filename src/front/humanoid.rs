@@ -488,6 +488,8 @@ pub struct FigureParts<'a> {
     pub hair_material: Handle<StandardMaterial>,
     pub beard: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub back: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// Chest sponsor print.
+    pub front: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
 }
 
 pub fn inverse_bindposes() -> SkinnedMeshInverseBindposes {
@@ -520,6 +522,14 @@ pub fn spawn_figure(commands: &mut Commands, root_tf: Transform, parts: FigurePa
     if let Some((mesh, mat)) = parts.back {
         // Printed on the back of the shirt (+Z), just proud of the surface.
         commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat), Transform::from_xyz(0.0, 0.0, 0.132), ChildOf(joints[CHEST])));
+    }
+    if let Some((mesh, mat)) = parts.front {
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            Transform::from_xyz(0.0, 0.01, -0.13).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+            ChildOf(joints[CHEST]),
+        ));
     }
     Figure { root, joints }
 }

@@ -59,7 +59,26 @@ const HAIRS: [u32; 6] = [0x17110D, 0x2E1E12, 0x5A3A1E, 0x8C6239, 0xC9A45C, 0x2A2
 const BOOTS: [u32; 8] = [0x141418, 0x141418, 0xF4F4F4, 0xFF5A1F, 0x23C4F0, 0xE8FF3A, 0xE0218A, 0x7B2CFF];
 
 /// Shared meshes for all figures in a match.
+/// Invented shirt sponsors; each club gets one, chosen from its name.
+const SPONSORS: [&str; 14] = [
+    "SAMBAR ENERGY",
+    "IDLI TELECOM",
+    "PANEER PAY",
+    "VADA PAV AIR",
+    "PAROTTA BANK",
+    "FILTER KAAPI",
+    "MASALA MOTORS",
+    "CHUTNEY CLOUD",
+    "GHEE INSURANCE",
+    "RASAM RAIL",
+    "PAPPAD PHONES",
+    "LASSI LABS",
+    "JALEBI JETS",
+    "KULFI COOLING",
+];
+
 struct Kit {
+    sponsor: Handle<Mesh>,
     bodies: Vec<(Build, Handle<Mesh>)>,
     bindposes: Handle<bevy::render::mesh::skinning::SkinnedMeshInverseBindposes>,
     back: Handle<Mesh>,
@@ -83,6 +102,7 @@ fn dress(
     seed: usize,
     keeper: bool,
     back_print: Option<(&str, u8, [u8; 4])>,
+    sponsor: Option<Handle<StandardMaterial>>,
     at: Vec2,
 ) -> humanoid::Figure {
     let atlas = images.add(humanoid::atlas(&look));
@@ -111,6 +131,7 @@ fn dress(
             hair_material,
             beard,
             back,
+            front: sponsor.map(|m| (kit.sponsor.clone(), m)),
         },
         StateScoped(AppState::Match),
     )
@@ -136,6 +157,7 @@ pub fn spawn_players(
         bodies,
         bindposes: bindposes.add(humanoid::inverse_bindposes()),
         back: meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.12, 0.13))),
+        sponsor: meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.13, 0.03))),
         beard: meshes.add(Sphere::new(0.085).mesh().uv(16, 10)),
         hair: (0..6).map(|s| humanoid::hair_meshes(s, meshes)).collect(),
     };
@@ -146,6 +168,14 @@ pub fn spawn_players(
         let trim_c = if shirt_c == team.home { team.trim } else { team.home };
         let shorts_c = if (lum(shirt_c) - lum(trim_c)).abs() > 60.0 { trim_c } else if lum(shirt_c) > 128.0 { 0x15151A } else { 0xF2F2F2 };
         let print_fg = |bg: u32| if lum(bg) > 140.0 { [20, 20, 28, 255] } else { [250, 250, 250, 255] };
+        let pick = team.name.bytes().fold(0usize, |a, b| a.wrapping_mul(17).wrapping_add(b as usize)) % SPONSORS.len();
+        let sponsor_img = images.add(super::font5x7::text_image(SPONSORS[pick], print_fg(shirt_c), [0, 0, 0, 0], 3, 1));
+        let sponsor = materials.add(StandardMaterial {
+            base_color_texture: Some(sponsor_img),
+            alpha_mode: AlphaMode::Mask(0.5),
+            perceptual_roughness: 0.8,
+            ..default()
+        });
         for i in t * PER_TEAM..(t + 1) * PER_TEAM {
             let p = &m.players[i];
             let keeper = p.role == Role::Gk;
@@ -180,7 +210,7 @@ pub fn spawn_players(
                 }
             };
             let fg = print_fg(if keeper { team.keeper } else { shirt_c });
-            let fig = dress(commands, materials, images, &kit, look, seed, keeper, Some((&p.name, p.num, fg)), p.pos);
+            let fig = dress(commands, materials, images, &kit, look, seed, keeper, Some((&p.name, p.num, fg)), (!keeper).then(|| sponsor.clone()), p.pos);
             commands.entity(fig.root).insert(Rig { idx: i, phase: (seed % 100) as f32 / 100.0, joints: fig.joints });
         }
     }
@@ -210,7 +240,7 @@ pub fn spawn_players(
             1 => Vec2::new(10.0, HALF_W + 1.0),
             _ => Vec2::new(-10.0, -HALF_W - 1.0),
         };
-        let fig = dress(commands, materials, images, &kit, look, seed, false, None, at);
+        let fig = dress(commands, materials, images, &kit, look, seed, false, None, None, at);
         if kind > 0 {
             let hand = fig.joints[humanoid::FOREARM_R];
             commands.spawn((Mesh3d(pole_mesh.clone()), MeshMaterial3d(pole_mat.clone()), Transform::from_xyz(0.0, -0.36, -0.12).with_rotation(Quat::from_rotation_x(FRAC_PI_2 * 0.9)), ChildOf(hand)));
