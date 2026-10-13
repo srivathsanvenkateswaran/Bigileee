@@ -211,6 +211,7 @@ impl Plugin for GamePlugin {
                 (
                     step_match,
                     celebrate::celebrations,
+                    players::redress_substitutes,
                     players::animate_players,
                     players::animate_officials,
                     players::animate_ball,

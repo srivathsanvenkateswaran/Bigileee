@@ -1,5 +1,6 @@
 //! Leagues and clubs (parody names) with their player cards.
 
+pub mod bio;
 pub mod types;
 
 mod burger;

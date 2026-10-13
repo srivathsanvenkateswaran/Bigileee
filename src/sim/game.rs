@@ -29,6 +29,9 @@ pub struct Player {
     pub ovr: u8,
     /// Index into the team's squad.
     pub card: usize,
+    /// Real height in metres and weight in kg where known (league-average defaults otherwise).
+    pub height: f32,
+    pub weight: f32,
     /// Counts down after a kick, for the striking animation.
     pub kick_anim: f32,
     pub stun: f32,
@@ -256,6 +259,8 @@ impl Match {
                     keeping: if slot.role == Role::Gk { f(c.ovr) } else { 0.0 },
                     ovr: c.ovr,
                     card: setup.xi[k],
+                    height: c.bio.map_or(1.8, |b| b.height_cm as f32 / 100.0),
+                    weight: c.bio.map_or(75.0, |b| b.weight_kg as f32),
                     kick_anim: 0.0,
                     stun: 0.0,
                     tackle_cd: 0.0,
@@ -1230,7 +1235,9 @@ impl Match {
             return;
         }
         let carrier = &self.players[c];
-        let chance = (0.42 + p.defending * 0.45 - carrier.dribbling * 0.2 + (self.skill[p.team] - 0.5) * 0.2)
+        // Heavier players hold their ground a little better in a challenge.
+        let strength = (p.weight - carrier.weight) * 0.004;
+        let chance = (0.42 + p.defending * 0.45 - carrier.dribbling * 0.2 + (self.skill[p.team] - 0.5) * 0.2 + strength)
             .clamp(0.15, 0.85);
         let facing = p.facing;
         let team = p.team;
@@ -1456,6 +1463,8 @@ impl Match {
         }
         p.ovr = c.ovr;
         p.card = card;
+        p.height = c.bio.map_or(1.8, |b| b.height_cm as f32 / 100.0);
+        p.weight = c.bio.map_or(75.0, |b| b.weight_kg as f32);
         p.stamina = 1.0;
         p.fitness = 1.0;
         p.yellows = 0;
@@ -1863,13 +1872,23 @@ impl Match {
         let z = self.ball.z;
 
         // Headers for balls at head height.
-        if (1.1..2.7).contains(&z) {
+        if (1.1..2.9).contains(&z) {
+            // Taller players get up higher and reach a little further, so they win aerial duels.
+            let reach = |p: &Player| 0.9 + (p.height - 1.8) * 1.6;
             let header = (0..PLAYERS)
                 .filter(|&j| {
                     let p = &self.players[j];
-                    p.role != Role::Gk && p.no_touch <= 0.0 && p.stun <= 0.0 && p.slide <= 0.0 && p.pos.distance(b) < 0.9
+                    p.role != Role::Gk
+                        && p.no_touch <= 0.0
+                        && p.stun <= 0.0
+                        && p.slide <= 0.0
+                        && z < 2.55 + (p.height - 1.8) * 1.4
+                        && p.pos.distance(b) < reach(p)
                 })
-                .min_by(|&a, &c| self.players[a].pos.distance(b).total_cmp(&self.players[c].pos.distance(b)));
+                .max_by(|&a, &c| {
+                    let score = |j: usize| reach(&self.players[j]) - self.players[j].pos.distance(b);
+                    score(a).total_cmp(&score(c))
+                });
             if let Some(j) = header {
                 if self.offside_called(j, sfx) {
                     return;

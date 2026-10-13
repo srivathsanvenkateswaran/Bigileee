@@ -20,6 +20,9 @@ pub const BALL_R: f32 = 0.13;
 #[derive(Component)]
 pub struct Rig {
     pub idx: usize,
+    /// Squad card the figure was dressed for; a substitution changes it and re-dresses.
+    card: usize,
+    left_foot: bool,
     phase: f32,
     joints: [Entity; JOINTS],
 }
@@ -77,7 +80,9 @@ const SPONSORS: [&str; 14] = [
     "KULFI COOLING",
 ];
 
-struct Kit {
+#[derive(Resource)]
+pub struct Kit {
+    sponsors: [Handle<StandardMaterial>; 2],
     sponsor: Handle<Mesh>,
     bodies: Vec<(Build, Handle<Mesh>)>,
     bindposes: Handle<bevy::render::mesh::skinning::SkinnedMeshInverseBindposes>,
@@ -103,6 +108,7 @@ fn dress(
     keeper: bool,
     back_print: Option<(&str, u8, [u8; 4])>,
     sponsor: Option<Handle<StandardMaterial>>,
+    bio: Option<crate::data::bio::Bio>,
     at: Vec2,
 ) -> humanoid::Figure {
     let atlas = images.add(humanoid::atlas(&look));
@@ -119,12 +125,24 @@ fn dress(
         (kit.back.clone(), mat)
     });
     let beard = ((seed / 5) % 4 == 0).then(|| (kit.beard.clone(), materials.add(StandardMaterial { base_color: color(look.hair), perceptual_roughness: 0.95, ..default() })));
-    let height = 0.95 + (seed % 9) as f32 * 0.011 + if keeper { 0.04 } else { 0.0 };
+    // Real heights where known; the model's default stance is about 1.8 m.
+    let height = match bio {
+        Some(b) => (b.height_cm as f32 / 180.0).clamp(0.86, 1.14),
+        None => 0.95 + (seed % 9) as f32 * 0.011 + if keeper { 0.04 } else { 0.0 },
+    };
+    // Build from body-mass index: slight, average or stocky.
+    let bulk = match bio {
+        Some(b) => {
+            let bmi = b.weight_kg as f32 / (b.height_cm as f32 / 100.0).powi(2);
+            if bmi < 21.6 { 0 } else if bmi < 23.6 { 1 } else { 2 }
+        }
+        None => seed % 3,
+    };
     humanoid::spawn_figure(
         commands,
         Transform::from_translation(sim_to_world(at, 0.0)).with_scale(Vec3::splat(height)),
         FigureParts {
-            body: kit.body(seed % 3, keeper),
+            body: kit.body(bulk, keeper),
             bindposes: kit.bindposes.clone(),
             material,
             hair: &kit.hair[(seed / 11) % kit.hair.len()],
@@ -153,7 +171,14 @@ pub fn spawn_players(
             bodies.push((b, meshes.add(humanoid::body_mesh(b))));
         }
     }
+    let sponsors = [0, 1].map(|t| {
+        let team = &m.teams[t];
+        let pick = team.name.bytes().fold(0usize, |a, b| a.wrapping_mul(17).wrapping_add(b as usize)) % SPONSORS.len();
+        let img = images.add(super::font5x7::text_image(SPONSORS[pick], print_fg(m.kit[t]), [0, 0, 0, 0], 3, 1));
+        materials.add(StandardMaterial { base_color_texture: Some(img), alpha_mode: AlphaMode::Mask(0.5), perceptual_roughness: 0.8, ..default() })
+    });
     let kit = Kit {
+        sponsors,
         bodies,
         bindposes: bindposes.add(humanoid::inverse_bindposes()),
         back: meshes.add(Plane3d::new(Vec3::Z, Vec2::new(0.12, 0.13))),
@@ -162,57 +187,8 @@ pub fn spawn_players(
         hair: (0..6).map(|s| humanoid::hair_meshes(s, meshes)).collect(),
     };
 
-    for t in 0..2 {
-        let team = &m.teams[t];
-        let shirt_c = m.kit[t];
-        let trim_c = if shirt_c == team.home { team.trim } else { team.home };
-        let shorts_c = if (lum(shirt_c) - lum(trim_c)).abs() > 60.0 { trim_c } else if lum(shirt_c) > 128.0 { 0x15151A } else { 0xF2F2F2 };
-        let print_fg = |bg: u32| if lum(bg) > 140.0 { [20, 20, 28, 255] } else { [250, 250, 250, 255] };
-        let pick = team.name.bytes().fold(0usize, |a, b| a.wrapping_mul(17).wrapping_add(b as usize)) % SPONSORS.len();
-        let sponsor_img = images.add(super::font5x7::text_image(SPONSORS[pick], print_fg(shirt_c), [0, 0, 0, 0], 3, 1));
-        let sponsor = materials.add(StandardMaterial {
-            base_color_texture: Some(sponsor_img),
-            alpha_mode: AlphaMode::Mask(0.5),
-            perceptual_roughness: 0.8,
-            ..default()
-        });
-        for i in t * PER_TEAM..(t + 1) * PER_TEAM {
-            let p = &m.players[i];
-            let keeper = p.role == Role::Gk;
-            let seed = p.name.bytes().fold(7usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize));
-            let look = if keeper {
-                Look {
-                    crest: Crest::Shield,
-                    shirt: team.keeper,
-                    accent: team.keeper,
-                    sleeve: team.keeper,
-                    shorts: team.keeper,
-                    socks: team.keeper,
-                    trim: 0x111111,
-                    skin: SKINS[seed % SKINS.len()],
-                    hair: HAIRS[(seed / 7) % HAIRS.len()],
-                    boots: BOOTS[(seed / 3) % BOOTS.len()],
-                    gloves: 0xE8FF3A,
-                }
-            } else {
-                Look {
-                    crest: team.crest,
-                    shirt: shirt_c,
-                    accent: trim_c,
-                    sleeve: shirt_c,
-                    shorts: shorts_c,
-                    socks: shirt_c,
-                    trim: trim_c,
-                    skin: SKINS[seed % SKINS.len()],
-                    hair: HAIRS[(seed / 7) % HAIRS.len()],
-                    boots: BOOTS[(seed / 3) % BOOTS.len()],
-                    gloves: 0xE8FF3A,
-                }
-            };
-            let fg = print_fg(if keeper { team.keeper } else { shirt_c });
-            let fig = dress(commands, materials, images, &kit, look, seed, keeper, Some((&p.name, p.num, fg)), (!keeper).then(|| sponsor.clone()), p.pos);
-            commands.entity(fig.root).insert(Rig { idx: i, phase: (seed % 100) as f32 / 100.0, joints: fig.joints });
-        }
+    for i in 0..PLAYERS {
+        spawn_player(commands, materials, images, &kit, m, i);
     }
 
     // Officials in black, the assistants with flags.
@@ -240,7 +216,7 @@ pub fn spawn_players(
             1 => Vec2::new(10.0, HALF_W + 1.0),
             _ => Vec2::new(-10.0, -HALF_W - 1.0),
         };
-        let fig = dress(commands, materials, images, &kit, look, seed, false, None, None, at);
+        let fig = dress(commands, materials, images, &kit, look, seed, false, None, None, None, at);
         if kind > 0 {
             let hand = fig.joints[humanoid::FOREARM_R];
             commands.spawn((Mesh3d(pole_mesh.clone()), MeshMaterial3d(pole_mat.clone()), Transform::from_xyz(0.0, -0.36, -0.12).with_rotation(Quat::from_rotation_x(FRAC_PI_2 * 0.9)), ChildOf(hand)));
@@ -281,6 +257,67 @@ pub fn spawn_players(
             scoped.clone(),
         ));
     }
+    commands.insert_resource(kit);
+}
+
+fn print_fg(bg: u32) -> [u8; 4] {
+    if lum(bg) > 140.0 { [20, 20, 28, 255] } else { [250, 250, 250, 255] }
+}
+
+/// Dresses and spawns player `i` as they are now (used at kick-off and after substitutions).
+fn spawn_player(commands: &mut Commands, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>, kit: &Kit, m: &Match, i: usize) {
+    let p = &m.players[i];
+    let t = p.team;
+    let team = &m.teams[t];
+    let shirt_c = m.kit[t];
+    let trim_c = if shirt_c == team.home { team.trim } else { team.home };
+    let shorts_c = if (lum(shirt_c) - lum(trim_c)).abs() > 60.0 { trim_c } else if lum(shirt_c) > 128.0 { 0x15151A } else { 0xF2F2F2 };
+    let keeper = p.role == Role::Gk;
+    let bio = team.squad.get(p.card).and_then(|c| c.bio);
+    let seed = p.name.bytes().fold(7usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize));
+    // Some veterans have gone grey.
+    let hair = if bio.is_some_and(|b| b.age >= 33) && seed % 2 == 0 { 0x8E8B86 } else { HAIRS[(seed / 7) % HAIRS.len()] };
+    let (shirt, accent, sleeve, shorts, socks, trim, crest) = if keeper {
+        (team.keeper, team.keeper, team.keeper, team.keeper, team.keeper, 0x111111, Crest::Shield)
+    } else {
+        (shirt_c, trim_c, shirt_c, shorts_c, shirt_c, trim_c, team.crest)
+    };
+    let look = Look {
+        crest,
+        shirt,
+        accent,
+        sleeve,
+        shorts,
+        socks,
+        trim,
+        skin: SKINS[seed % SKINS.len()],
+        hair,
+        boots: BOOTS[(seed / 3) % BOOTS.len()],
+        gloves: 0xE8FF3A,
+    };
+    let fg = print_fg(if keeper { team.keeper } else { shirt_c });
+    let sponsor = (!keeper).then(|| kit.sponsors[t].clone());
+    let fig = dress(commands, materials, images, kit, look, seed, keeper, Some((&p.name, p.num, fg)), sponsor, bio, p.pos);
+    let left_foot = bio.is_some_and(|b| b.left_foot);
+    commands.entity(fig.root).insert(Rig { idx: i, card: p.card, left_foot, phase: (seed % 100) as f32 / 100.0, joints: fig.joints });
+}
+
+/// Rebuilds a figure when a substitution changes who is in that position.
+pub fn redress_substitutes(
+    mut commands: Commands,
+    res: Option<Res<MatchRes>>,
+    kit: Option<Res<Kit>>,
+    rigs: Query<(Entity, &Rig)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let (Some(res), Some(kit)) = (res, kit) else { return };
+    for (e, rig) in &rigs {
+        if res.m.players[rig.idx].card != rig.card {
+            commands.entity(e).despawn();
+            spawn_player(&mut commands, &mut materials, &mut images, &kit, &res.m, rig.idx);
+        }
+    }
 }
 
 fn yaw(facing: Vec2) -> Quat {
@@ -316,6 +353,7 @@ fn motion(p: &PlayerView, phase: f32, t: f32, look: f32) -> Motion {
         time: t,
         flag_up: false,
         routine: None,
+        left_footed: false,
     }
 }
 
@@ -338,6 +376,7 @@ pub fn animate_players(
         tf.rotation = tf.rotation.slerp(target, (dt * 16.0).min(1.0));
         let look = look_at(tf.rotation, p.pos, view.ball.pos);
         let mut mo = motion(p, rig.phase, t + rig.idx as f32, look);
+        mo.left_footed = rig.left_foot;
         if let Some((_, kind, ct)) = view.celebration.filter(|c| c.0 == rig.idx) {
             mo.routine = Some((kind, ct));
             if kind == 4 && ct > 1.2 {

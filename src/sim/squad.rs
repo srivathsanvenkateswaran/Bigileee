@@ -17,6 +17,8 @@ pub struct Card {
     pub phy: u8,
     /// True for fictional fillers created because the club's card list was short.
     pub generated: bool,
+    /// Real height, weight, strong foot and age, when known.
+    pub bio: Option<crate::data::bio::Bio>,
 }
 
 impl From<&P> for Card {
@@ -33,6 +35,7 @@ impl From<&P> for Card {
             def: p.def,
             phy: p.phy,
             generated: false,
+            bio: None,
         }
     }
 }
@@ -139,12 +142,15 @@ fn filler(rng: &mut Seeded, pos: Pos, num: u8, rating: u8, taken: &[Card]) -> Ca
             break n;
         }
     };
-    Card { name, pos, num, ovr, pac, sho, pas, dri, def, phy, generated: true }
+    Card { name, pos, num, ovr, pac, sho, pas, dri, def, phy, generated: true, bio: None }
 }
 
 impl TeamSetup {
     pub fn from_club(club: &Club) -> TeamSetup {
         let mut squad: Vec<Card> = club.players.iter().map(Card::from).collect();
+        for c in &mut squad {
+            c.bio = crate::data::bio::lookup(club.name, c.num);
+        }
         let mut rng = Seeded::new(club.name);
         let slots = formation::slots(club.formation);
 

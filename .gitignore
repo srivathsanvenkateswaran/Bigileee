@@ -1,2 +1,5 @@
 /target
 /.claude/
+
+# Third-party player datasets stay local
+*.csv

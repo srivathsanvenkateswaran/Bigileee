@@ -143,14 +143,7 @@ pub fn atlas(look: &Look) -> Image {
     fill(&mut data, Cell::Gloves, look.gloves);
     fill(&mut data, Cell::Boots, look.boots);
     fill(&mut data, Cell::Hair, look.hair);
-    // Everything outside the pattern and cells (bottom-left quarter) is skin, a safe fallback.
-    let [r, g, b] = rgb(look.skin);
-    for y in 64..n {
-        for x in 0..64 {
-            let d = (y * n + x) * 4;
-            data[d..d + 4].copy_from_slice(&[r, g, b, 255]);
-        }
-    }
+    paint_face(&mut data, n, look);
     let mut img = Image::new(
         Extent3d { width: ATLAS, height: ATLAS, depth_or_array_layers: 1 },
         TextureDimension::D2,
@@ -160,6 +153,44 @@ pub fn atlas(look: &Look) -> Image {
     );
     img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
     img
+}
+
+/// Paints a simple generic face into the bottom-left quarter: skin with soft shading, eyes,
+/// brows and a mouth centred on the front (u = 0.75 of the head's wrap).
+fn paint_face(data: &mut [u8], n: usize, look: &Look) {
+    let [r, g, b] = rgb(look.skin).map(|c| c as f32);
+    let set = |data: &mut [u8], x: usize, y: usize, c: [f32; 3]| {
+        let d = ((64 + y) * n + x) * 4;
+        data[d..d + 4].copy_from_slice(&[c[0].clamp(0.0, 255.0) as u8, c[1].clamp(0.0, 255.0) as u8, c[2].clamp(0.0, 255.0) as u8, 255]);
+    };
+    for y in 0..64 {
+        for x in 0..64 {
+            let (u, v) = (x as f32 / 64.0, y as f32 / 64.0);
+            // Slightly darker towards the back of the head and under the jaw.
+            let front = (1.0 - ((u - 0.75).abs() * 2.0).min(1.0)) * 0.08;
+            let under = (v - 0.7).max(0.0) * 0.25;
+            let k = 0.94 + front - under;
+            set(data, x, y, [r * k, g * k, b * k]);
+        }
+    }
+    let px = |u: f32| (u * 64.0).round() as usize;
+    let py = |v: f32| (v * 64.0).round() as usize;
+    let [hr, hg, hb] = rgb(look.hair).map(|c| c as f32);
+    let lip = [r * 0.72 + 20.0, g * 0.55, b * 0.55];
+    for side in [-1.0f32, 1.0] {
+        let ex = px(0.75 + side * 0.048);
+        let ey = py(0.47);
+        for dx in 0..3 {
+            set(data, ex + dx - 1, ey, [235.0, 232.0, 226.0]);
+        }
+        set(data, ex, ey, [40.0, 28.0, 22.0]);
+        for dx in 0..4 {
+            set(data, ex + dx - 2, py(0.41), [hr * 0.9, hg * 0.9, hb * 0.9]);
+        }
+    }
+    for dx in 0..5 {
+        set(data, px(0.75) + dx - 2, py(0.645), lip);
+    }
 }
 
 /// Name above number, as printed on the back of a shirt.
@@ -283,6 +314,11 @@ impl Builder {
     }
 
     fn ellipsoid(&mut self, c: Vec3, r: Vec3, skin: Skin, uv: [f32; 2]) {
+        self.ellipsoid_uv(c, r, skin, move |_, _| uv);
+    }
+
+    /// An ellipsoid whose UVs come from `uv(v, u)`: v runs top to bottom, u around (0.75 faces -Z).
+    fn ellipsoid_uv(&mut self, c: Vec3, r: Vec3, skin: Skin, uv: impl Fn(f32, f32) -> [f32; 2]) {
         let (lat, lon) = (10, AROUND);
         let base = self.pos.len() as u32;
         for i in 0..=lat {
@@ -290,7 +326,7 @@ impl Builder {
             for k in 0..=lon {
                 let th = k as f32 / lon as f32 * TAU;
                 let p = c + Vec3::new(phi.sin() * th.cos() * r.x, phi.cos() * r.y, phi.sin() * th.sin() * r.z);
-                self.vertex(p, uv, skin);
+                self.vertex(p, uv(i as f32 / lat as f32, k as f32 / lon as f32), skin);
             }
         }
         let row = (lon + 1) as u32;
@@ -379,7 +415,8 @@ pub fn body_mesh(b: Build) -> Mesh {
     );
     // Neck and head.
     m.tube(Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.0, 1.66, 0.0), 3, |_| (0.055, 0.055), |t| blend(CHEST, HEAD, 0.4 + t * 0.6), |_, _| cell(Cell::Skin), (false, false));
-    m.ellipsoid(jp(HEAD) + Vec3::new(0.0, 0.11, -0.005), Vec3::new(0.1, 0.122, 0.112), one(HEAD), cell(Cell::Skin));
+    // The head samples the face region (bottom-left quarter of the atlas).
+    m.ellipsoid_uv(jp(HEAD) + Vec3::new(0.0, 0.11, -0.005), Vec3::new(0.1, 0.122, 0.112), one(HEAD), |v, u| [0.005 + u * 0.49, 0.505 + v * 0.49]);
     m.ellipsoid(jp(HEAD) + Vec3::new(0.0, 0.055, -0.085), Vec3::new(0.016, 0.026, 0.02), one(HEAD), cell(Cell::Skin)); // nose
     for s in [-1.0f32, 1.0] {
         m.ellipsoid(jp(HEAD) + Vec3::new(s * 0.1, 0.1, 0.0), Vec3::new(0.016, 0.03, 0.02), one(HEAD), cell(Cell::Skin)); // ears
@@ -571,6 +608,8 @@ pub struct Motion {
     pub flag_up: bool,
     /// A goal celebration routine and seconds into it.
     pub routine: Option<(usize, f32)>,
+    /// Strikes the ball with the left foot.
+    pub left_footed: bool,
 }
 
 pub fn pose(m: Motion) -> Pose {
@@ -631,14 +670,20 @@ pub fn pose(m: Motion) -> Pose {
             let s = (k - 0.55) / 0.45;
             (1.3 - 0.9 * s, 0.1 + 0.3 * s)
         };
-        p.rot[THIGH_R] = rx(thigh);
-        p.rot[SHIN_R] = rx(-knee);
-        p.rot[FOOT_R] = rx(-0.3);
-        p.rot[THIGH_L] = rx(-0.15);
-        p.rot[SHIN_L] = rx(-0.35);
-        p.rot[ARM_L] = rz(-0.9) * rx(0.3);
-        p.rot[ARM_R] = rz(0.6) * rx(-0.3);
-        p.rot[SPINE] = rx(0.1) * ry(0.25 * (k - 0.4));
+        // Left-footers mirror the whole action.
+        let (kt, ks, kf, pt, ps, ka, oa, side) = if m.left_footed {
+            (THIGH_L, SHIN_L, FOOT_L, THIGH_R, SHIN_R, ARM_R, ARM_L, -1.0)
+        } else {
+            (THIGH_R, SHIN_R, FOOT_R, THIGH_L, SHIN_L, ARM_L, ARM_R, 1.0)
+        };
+        p.rot[kt] = rx(thigh);
+        p.rot[ks] = rx(-knee);
+        p.rot[kf] = rx(-0.3);
+        p.rot[pt] = rx(-0.15);
+        p.rot[ps] = rx(-0.35);
+        p.rot[ka] = rz(-0.9 * side) * rx(0.3);
+        p.rot[oa] = rz(0.6 * side) * rx(-0.3);
+        p.rot[SPINE] = rx(0.1) * ry(0.25 * (k - 0.4) * side);
         p.hip_y = 0.9;
     }
     if m.sliding {
