@@ -261,13 +261,14 @@ fn pose(p: &PlayerView, phase: f32, t: f32) -> Pose {
 pub fn animate_players(
     view: Res<View>,
     time: Res<Time>,
-    mut rigs: Query<(&mut Rig, &mut Transform)>,
+    mut rigs: Query<(&mut Rig, &mut Transform, &mut Visibility)>,
     mut parts: Query<&mut Transform, Without<Rig>>,
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
-    for (mut rig, mut tf) in &mut rigs {
+    for (mut rig, mut tf, mut vis) in &mut rigs {
         let Some(p) = view.players.get(rig.idx) else { continue };
+        *vis = if p.sent_off { Visibility::Hidden } else { Visibility::Inherited };
         let speed = p.vel.length();
         // About one stride cycle per 1.9 m.
         rig.phase = (rig.phase + speed * dt / 1.9).fract();

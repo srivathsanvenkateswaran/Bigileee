@@ -16,6 +16,7 @@ pub struct PlayerView {
     pub stun: f32,
     pub holding: bool,
     pub celebrating: bool,
+    pub sent_off: bool,
 }
 
 #[derive(Clone, Default)]
@@ -55,6 +56,7 @@ impl View {
                     stun: p.stun,
                     holding: p.role == Role::Gk && m.ball.owner == Some(i),
                     celebrating: celebrating == Some(p.team) && p.role != Role::Gk,
+                    sent_off: p.sent_off,
                 })
                 .collect(),
             ball: BallView { pos: m.ball.pos, z: m.ball.z, vel: m.ball.vel },

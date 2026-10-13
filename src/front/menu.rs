@@ -82,7 +82,7 @@ pub fn title_input(
                 return;
             }
         }
-        menu.row = 7;
+        menu.row = START_ROW;
         next.set(AppState::Setup);
     }
 }
@@ -129,7 +129,8 @@ pub fn draw_title(mut commands: Commands, fonts: Res<Fonts>, mut menu: ResMut<Me
 
 // ---------- setup ----------
 
-const ROWS: usize = 8;
+const ROWS: usize = 9;
+pub const START_ROW: usize = ROWS - 1;
 
 pub fn setup_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -170,6 +171,7 @@ pub fn setup_input(
             4 => settings.half = cycle(settings.half, HALVES.len()),
             5 => settings.level = cycle(settings.level, LEVELS.len()),
             6 => settings.camera = CamMode::ALL[cycle(CamMode::ALL.iter().position(|c| *c == settings.camera).unwrap_or(0), 3)],
+            7 => settings.commentary = !settings.commentary,
             _ => {}
         }
         if menu.row <= 3 {
@@ -285,6 +287,7 @@ pub fn draw_setup(
                 ("Half length", HALVES[settings.half].0.to_string()),
                 ("CPU level", LEVELS[settings.level].0.to_string()),
                 ("Camera", settings.camera.label().to_string()),
+                ("Commentary", if settings.commentary { "On".to_string() } else { "Off".to_string() }),
             ];
             c.spawn(Node { column_gap: Val::Px(26.0), ..default() }).with_children(|o| {
                 for (k, (label, value)) in opts.iter().enumerate() {

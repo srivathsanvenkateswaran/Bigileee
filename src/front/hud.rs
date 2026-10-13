@@ -36,6 +36,8 @@ pub struct PromptText;
 #[derive(Component)]
 pub struct ReplayTag;
 #[derive(Component)]
+pub struct CommentaryText;
+#[derive(Component)]
 pub struct OverlayRoot;
 #[derive(Component)]
 pub struct OverlayTitle;
@@ -206,10 +208,21 @@ pub fn spawn_hud(commands: &mut Commands, fonts: &Fonts, images: &mut Assets<Ima
         scoped.clone(),
     ));
     commands.spawn((
-        Node { position_type: PositionType::Absolute, bottom: Val::Px(200.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+        Node { position_type: PositionType::Absolute, bottom: Val::Px(250.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
         scoped.clone(),
     ))
     .with_child((text(fonts, "", 22.0, HUMAN_COLOURS[0]), PromptText, TextShadow::default()));
+    commands.spawn((
+        Node { position_type: PositionType::Absolute, bottom: Val::Px(MAP_H + 40.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+        scoped.clone(),
+    ))
+    .with_child((
+        Text::new(""),
+        TextFont { font: fonts.regular.clone(), font_size: 21.0, ..default() },
+        TextColor(Color::WHITE),
+        TextShadow::default(),
+        CommentaryText,
+    ));
 
     // Pause and match-report panel.
     commands
@@ -257,6 +270,8 @@ pub fn spawn_hud(commands: &mut Commands, fonts: &Fonts, images: &mut Assets<Ima
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_hud(
     res: Res<MatchRes>,
+    talk: Option<Res<super::commentary::Commentary>>,
+    mut subtitle: Query<&mut Text, (With<CommentaryText>, Without<ScoreText>, Without<ClockText>, Without<HalfText>, Without<BannerText>, Without<TagName>, Without<PromptText>, Without<OverlayTitle>, Without<OverlayBody>)>,
     view: Res<View>,
     cam: Query<(&Camera, &GlobalTransform), With<MainCam>>,
     mut texts: ParamSet<(
@@ -285,7 +300,13 @@ pub fn update_hud(
         }
     };
     if let Ok(mut t) = texts.p0().single_mut() {
-        set(&mut t, format!("{} - {}", m.score[0], m.score[1]));
+        let pens = m.shootout.as_ref().map(|s| format!("  ({}-{} P)", s.goals(0), s.goals(1))).unwrap_or_default();
+        set(&mut t, format!("{} - {}{}", m.score[0], m.score[1], pens));
+    }
+    let talk_on = talk.as_ref().is_some_and(|t| t.enabled);
+    if let (Some(talk), Ok(mut t)) = (talk.as_ref(), subtitle.single_mut()) {
+        let line = if res.paused || view.replay { String::new() } else { talk.line.clone() };
+        set(&mut t, line);
     }
     let (min, sec) = m.display_minute();
     if let Ok(mut t) = texts.p1().single_mut() {
@@ -349,6 +370,7 @@ pub fn update_hud(
 
     // Minimap.
     for (dot, mut node) in &mut dots {
+        node.display = if dot.0 < PLAYERS && view.players[dot.0].sent_off { Display::None } else { Display::Flex };
         let (p, size) = if dot.0 == PLAYERS { (view.ball.pos, 6.0) } else { (view.players[dot.0].pos, 8.0) };
         node.left = Val::Px((p.x + HALF_L) / (2.0 * HALF_L) * MAP_W - size / 2.0);
         node.top = Val::Px((p.y + HALF_W) / (2.0 * HALF_W) * MAP_H - size / 2.0);
@@ -375,12 +397,16 @@ pub fn update_hud(
     }
 
     // Pause, half-time and full-time panel.
-    let panel = if res.paused {
-        let items = ["Resume", "Restart match", "Quit to menu"];
-        let body = items
+    let panel = if let (true, Some(ui)) = (res.paused, res.subs) {
+        Some((format!("SUBSTITUTIONS  ·  {}", m.teams[ui.team].short), subs_body(&res, ui)))
+    } else if res.paused {
+        let body = super::PAUSE_ITEMS
             .iter()
             .enumerate()
-            .map(|(k, s)| if k == res.pause_sel { format!("> {s} <") } else { s.to_string() })
+            .map(|(k, s)| {
+                let s = if *s == "Commentary" { format!("Commentary: {}", if talk_on { "On" } else { "Off" }) } else { s.to_string() };
+                if k == res.pause_sel { format!("> {s} <") } else { s }
+            })
             .collect::<Vec<_>>()
             .join("\n");
         Some(("PAUSED".to_string(), body))
@@ -426,4 +452,39 @@ fn report(res: &MatchRes) -> String {
         }
     }
     s
+}
+
+fn subs_body(res: &MatchRes, ui: super::SubsUi) -> String {
+    let m = &res.m;
+    let t = ui.team;
+    let slots = m.teams[t].slots();
+    let mut lines = vec![format!("Subs left: {}", m.subs_left[t]), String::new()];
+    let mark = |col: usize, row: usize| if ui.col == col && ui.row == row { "> " } else { "   " };
+    lines.push("ON THE PITCH".into());
+    for k in 0..11 {
+        let i = t * 11 + k;
+        let p = &m.players[i];
+        let status = if p.sent_off {
+            "  sent off".to_string()
+        } else {
+            let card = if p.yellows > 0 { "  [Y]" } else { "" };
+            format!("  {:>3}% fit{}", (p.fitness.min(p.stamina) * 100.0) as u32, card)
+        };
+        let chosen = if ui.out == Some(i) { "  <- OFF" } else { "" };
+        lines.push(format!("{}{:<4} {:>2} {}  {}{}{}", mark(0, k), format!("{:?}", slots[k].pos), p.num, p.name, p.ovr, status, chosen));
+    }
+    lines.push(String::new());
+    lines.push("BENCH".into());
+    let bench = m.bench(t);
+    if bench.is_empty() {
+        lines.push("   (nobody left)".into());
+    }
+    for (r, &k) in bench.iter().enumerate() {
+        let c = &m.teams[t].squad[k];
+        lines.push(format!("{}{:<4} {:>2} {}  {}", mark(1, r), format!("{:?}", c.pos), c.num, c.name, c.ovr));
+    }
+    lines.push(String::new());
+    let hint = if ui.out.is_some() { "Pick who comes on  ·  Esc cancel" } else { "Pick who comes off  ·  Esc back" };
+    lines.push(if m.humans.len() == 1 { hint.to_string() } else { format!("{hint}  ·  Tab / RB other team") });
+    lines.join("\n")
 }

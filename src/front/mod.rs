@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod camera;
+pub mod commentary;
 pub mod controls;
 pub mod font5x7;
 pub mod hud;
@@ -40,6 +41,7 @@ pub struct Settings {
     pub half: usize,
     pub level: usize,
     pub camera: CamMode,
+    pub commentary: bool,
     pub home_team: TeamSetup,
     pub away_team: TeamSetup,
 }
@@ -57,6 +59,7 @@ impl Settings {
             half: 1,
             level: 2,
             camera: CamMode::Broadcast,
+            commentary: true,
             home_team: TeamSetup::from_club(&l[home.0].clubs[home.1]),
             away_team: TeamSetup::from_club(&l[away.0].clubs[away.1]),
         }
@@ -79,7 +82,21 @@ pub struct MatchRes {
     pub sfx: Sfx,
     pub paused: bool,
     pub pause_sel: usize,
+    pub subs: Option<SubsUi>,
 }
+
+/// Substitutions screen state (opened from the pause menu).
+#[derive(Clone, Copy, Default)]
+pub struct SubsUi {
+    pub team: usize,
+    /// 0 = players on the pitch, 1 = bench.
+    pub col: usize,
+    pub row: usize,
+    /// Player index chosen to come off.
+    pub out: Option<usize>,
+}
+
+pub const PAUSE_ITEMS: [&str; 5] = ["Resume", "Substitutions", "Commentary", "Restart match", "Quit to menu"];
 
 #[derive(Resource)]
 pub struct Fonts {
@@ -176,7 +193,10 @@ fn setup_match(
     stadium::spawn_stadium(&mut commands, &mut meshes, &mut materials, &mut images, m.kit[0], m.kit[1], &league);
     players::spawn_players(&mut commands, &mut meshes, &mut materials, &mut images, &m);
     camera::spawn_camera(&mut commands);
-    let res = MatchRes { m, sfx: Sfx::default(), paused: false, pause_sel: 0 };
+    let res = MatchRes { m, sfx: Sfx::default(), paused: false, pause_sel: 0, subs: None };
+    let mut talk = commentary::Commentary::new();
+    talk.enabled = settings.commentary;
+    commands.insert_resource(talk);
     hud::spawn_hud(&mut commands, &fonts, &mut images, &res);
     commands.spawn((
         AudioPlayer::new(sounds.crowd.clone()),
@@ -190,6 +210,7 @@ fn setup_match(
 
 fn teardown_match(mut commands: Commands) {
     commands.remove_resource::<MatchRes>();
+    commands.remove_resource::<commentary::Commentary>();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,9 +225,11 @@ fn step_match(
     cam: Query<&GlobalTransform, With<MainCam>>,
     time: Res<Time>,
     sounds: Res<audio::Sounds>,
+    mut talk: ResMut<commentary::Commentary>,
     mut next: ResMut<NextState<AppState>>,
 ) {
     let dt = time.delta_secs().min(1.0 / 30.0);
+    talk.tick(dt);
     let pad_list: Vec<&Gamepad> = pads.iter().collect();
     let pad = |b: GamepadButton| pad_list.iter().any(|p| p.just_pressed(b));
     let confirm = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || pad(GamepadButton::South);
@@ -223,25 +246,51 @@ fn step_match(
         return;
     }
 
+    let back = keys.just_pressed(KeyCode::Escape) || pad(GamepadButton::East);
+    let up = keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp);
+    let down = keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) || pad(GamepadButton::DPadDown);
+    let left = keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft);
+    let right = keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight);
+
+    if res.paused && res.subs.is_some() {
+        subs_input(&mut res, up, down, left, right, confirm, back, keys.just_pressed(KeyCode::Tab) || pad(GamepadButton::RightTrigger));
+        for c in res.sfx.drain_calls() {
+            let names = [res.m.teams[0].name.clone(), res.m.teams[1].name.clone()];
+            talk.react(&c, |t| names[t].clone());
+        }
+        return;
+    }
     if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyP) || pad(GamepadButton::Start) {
         res.paused = !res.paused;
         res.pause_sel = 0;
+        if res.paused {
+            talk.stop();
+        }
     }
     if res.paused {
-        if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) || pad(GamepadButton::DPadDown) {
-            res.pause_sel = (res.pause_sel + 1) % 3;
+        let n = PAUSE_ITEMS.len();
+        if down {
+            res.pause_sel = (res.pause_sel + 1) % n;
         }
-        if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
-            res.pause_sel = (res.pause_sel + 2) % 3;
+        if up {
+            res.pause_sel = (res.pause_sel + n - 1) % n;
         }
         if confirm {
             match res.pause_sel {
                 0 => res.paused = false,
                 1 => {
+                    let team = res.m.humans.first().map_or(0, |h| h.team);
+                    res.subs = Some(SubsUi { team, ..default() });
+                }
+                2 => {
+                    talk.enabled = !talk.enabled;
+                    settings.commentary = talk.enabled;
+                }
+                3 => {
                     // Re-enter the match state to rebuild everything from scratch.
                     next.set(AppState::Setup);
                     settings.mode = res.m.cfg.mode;
-                    commands.insert_resource(menu::MenuState { row: 7, dirty: true });
+                    commands.insert_resource(menu::MenuState { row: menu::START_ROW, dirty: true });
                 }
                 _ => next.set(AppState::Title),
             }
@@ -267,6 +316,10 @@ fn step_match(
     for e in sfx.drain() {
         audio::play(&mut commands, &sounds, e);
     }
+    let names = [m.teams[0].name.clone(), m.teams[1].name.clone()];
+    for c in sfx.drain_calls() {
+        talk.react(&c, |t| names[t].clone());
+    }
     *view = View::from_match(&res.m);
     replay.record(dt, &view);
 
@@ -277,6 +330,53 @@ fn step_match(
         *t -= dt;
         if *t <= 0.0 {
             replay.start();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn subs_input(res: &mut MatchRes, up: bool, down: bool, left: bool, right: bool, confirm: bool, back: bool, swap_team: bool) {
+    let MatchRes { m, sfx, subs, .. } = res;
+    let Some(ui) = subs.as_mut() else { return };
+    if back {
+        if ui.out.is_some() {
+            ui.out = None;
+            ui.col = 0;
+        } else {
+            *subs = None;
+        }
+        return;
+    }
+    // In 2-player and watch modes either side can be managed; otherwise only the human's.
+    if swap_team && m.humans.len() != 1 {
+        ui.team = 1 - ui.team;
+        *ui = SubsUi { team: ui.team, ..default() };
+    }
+    let bench = m.bench(ui.team);
+    let len = if ui.col == 0 { 11 } else { bench.len().max(1) };
+    if down {
+        ui.row = (ui.row + 1) % len;
+    }
+    if up {
+        ui.row = (ui.row + len - 1) % len;
+    }
+    if (left || right) && ui.out.is_some() {
+        ui.col = 1 - ui.col;
+        ui.row = 0;
+    }
+    if confirm {
+        if ui.col == 0 {
+            let i = ui.team * 11 + ui.row;
+            if !m.players[i].sent_off {
+                ui.out = Some(i);
+                ui.col = 1;
+                ui.row = 0;
+            }
+        } else if let (Some(i), Some(&card)) = (ui.out, bench.get(ui.row)) {
+            m.substitute(i, card, sfx);
+            ui.out = None;
+            ui.col = 0;
+            ui.row = 0;
         }
     }
 }
