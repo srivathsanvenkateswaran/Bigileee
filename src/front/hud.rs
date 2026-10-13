@@ -305,7 +305,7 @@ pub fn update_hud(
     }
     let talk_on = talk.as_ref().is_some_and(|t| t.enabled);
     if let (Some(talk), Ok(mut t)) = (talk.as_ref(), subtitle.single_mut()) {
-        let line = if res.paused || view.replay { String::new() } else { talk.line.clone() };
+        let line = if res.paused || view.replay { String::new() } else { talk.hint.clone().unwrap_or_else(|| talk.line.clone()) };
         set(&mut t, line);
     }
     let (min, sec) = m.display_minute();

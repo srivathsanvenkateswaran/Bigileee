@@ -10,6 +10,8 @@ use std::process::{Child, Command, Stdio};
 pub struct Commentary {
     pub enabled: bool,
     pub line: String,
+    /// A control hint that takes over the subtitle line while set.
+    pub hint: Option<String>,
     shown_for: f32,
     since_last: f32,
     speaking: Option<Child>,
@@ -27,6 +29,7 @@ impl Commentary {
         Commentary {
             enabled: true,
             line: String::new(),
+            hint: None,
             shown_for: 0.0,
             since_last: 10.0,
             speaking: None,
@@ -75,6 +78,13 @@ impl Commentary {
         if self.shown_for > 4.0 {
             self.line.clear();
         }
+    }
+
+    /// Names the scorer's celebration, in the colour voice.
+    pub fn celebration(&mut self, scorer: &str, routine: &str) {
+        let pick = |xs: &[&str]| xs[gen_range(0, xs.len())].to_string();
+        let l = pick(&["And {p} busts out the {c}!", "Oh, it's the {c} from {p}!", "{p} goes for the {c}. Magnificent.", "The {c}! {p} has been practising that."]);
+        self.say(&l.replace("{p}", scorer).replace("{c}", routine), true, true);
     }
 
     /// Reacts to one simulation call. `team_name` resolves a team index for goal lines.

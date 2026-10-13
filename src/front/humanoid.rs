@@ -559,6 +559,8 @@ pub struct Motion {
     pub time: f32,
     /// Raised flag arm (linesmen).
     pub flag_up: bool,
+    /// A goal celebration routine and seconds into it.
+    pub routine: Option<(usize, f32)>,
 }
 
 pub fn pose(m: Motion) -> Pose {
@@ -673,6 +675,9 @@ pub fn pose(m: Motion) -> Pose {
         p.rot[SHIN_R] = rx(-0.6 * (1.0 - jump));
         p.rot[HEAD] = rx(-0.35);
     }
+    if let Some((kind, t)) = m.routine {
+        routine(&mut p, kind, t);
+    }
     if m.stunned && !m.sliding && m.dive.is_none() {
         p.rot[SPINE] = rz((m.time * 11.0).sin() * 0.1) * rx(0.35);
         p.rot[HEAD] = rx(0.3);
@@ -682,6 +687,84 @@ pub fn pose(m: Motion) -> Pose {
         p.rot[FOREARM_R] = rx(0.1);
     }
     p
+}
+
+/// The five celebration routines. Most play once the scorer has wheeled away (about 1.2 s in).
+fn routine(p: &mut Pose, kind: usize, t: f32) {
+    let rx = Quat::from_rotation_x;
+    let rz = Quat::from_rotation_z;
+    let start = 1.2;
+    if t < start && kind != 4 {
+        return;
+    }
+    let s = t - start;
+    match kind {
+        // Sambar Slide: on the knees, leaning back, arms flung wide.
+        0 => {
+            let lean = (s * 3.0).min(1.0);
+            p.hip_y = 0.95 - 0.5 * lean;
+            p.rot[HIPS] = rx(-0.35 * lean);
+            p.rot[SPINE] = rx(-0.25 * lean);
+            for (thigh, shin) in [(THIGH_L, SHIN_L), (THIGH_R, SHIN_R)] {
+                p.rot[thigh] = rx(0.35 * lean);
+                p.rot[shin] = rx(-1.9 * lean);
+            }
+            p.rot[ARM_L] = rz(-1.45) * rx(-0.3);
+            p.rot[ARM_R] = rz(1.45) * rx(-0.3);
+            p.rot[FOREARM_L] = rx(0.1);
+            p.rot[FOREARM_R] = rx(0.1);
+            p.rot[HEAD] = rx(-0.5);
+        }
+        // Dosa Flip: a tucked backflip, then a proud landing.
+        1 => {
+            let f = (s / 0.8).clamp(0.0, 1.0);
+            if f < 1.0 {
+                p.hip_y = 0.95 + (f * std::f32::consts::PI).sin() * 1.3;
+                p.rot[HIPS] = rx(-std::f32::consts::TAU * f);
+                for (thigh, shin) in [(THIGH_L, SHIN_L), (THIGH_R, SHIN_R)] {
+                    p.rot[thigh] = rx(1.6 * (f * std::f32::consts::PI).sin());
+                    p.rot[shin] = rx(-2.0 * (f * std::f32::consts::PI).sin());
+                }
+                p.rot[ARM_L] = rx(1.0);
+                p.rot[ARM_R] = rx(1.0);
+            } else {
+                p.rot[ARM_L] = rz(-2.6);
+                p.rot[ARM_R] = rz(2.6);
+            }
+        }
+        // Filter Kaapi Pour: one hand high, one low, pouring between them.
+        2 => {
+            let pour = (s * 3.5).sin();
+            p.rot[ARM_L] = rz(-2.4) * rx(0.4);
+            p.rot[FOREARM_L] = rx(0.6 + pour * 0.25);
+            p.rot[ARM_R] = rx(0.9) * rz(0.2);
+            p.rot[FOREARM_R] = rx(1.2 - pour * 0.25);
+            p.rot[HEAD] = rx(-0.25);
+            p.hip_y = 0.93;
+        }
+        // Biryani Bow: a deep, slow bow to the crowd.
+        3 => {
+            let bow = ((s * 1.2).sin() * 0.5 + 0.5).max(0.0);
+            p.rot[SPINE] = rx(0.9 * bow);
+            p.rot[CHEST] = rx(0.3 * bow);
+            p.rot[HEAD] = rx(0.4 * bow);
+            p.rot[ARM_L] = rz(-0.7) * rx(-0.6 * bow);
+            p.rot[ARM_R] = rz(0.7) * rx(-0.6 * bow);
+            p.rot[THIGH_L] = rx(0.0);
+            p.rot[THIGH_R] = rx(0.0);
+            p.rot[SHIN_L] = rx(-0.1);
+            p.rot[SHIN_R] = rx(-0.1);
+            p.hip_y = 0.94;
+        }
+        // Helicopter: arms out like rotor blades (the spin is applied to the root).
+        _ => {
+            p.rot[ARM_L] = rz(-1.55);
+            p.rot[ARM_R] = rz(1.55);
+            p.rot[FOREARM_L] = Quat::IDENTITY;
+            p.rot[FOREARM_R] = Quat::IDENTITY;
+            p.rot[HEAD] = rx(-0.3);
+        }
+    }
 }
 
 pub fn apply<F: bevy::ecs::query::QueryFilter>(pose: &Pose, joints: &[Entity; JOINTS], q: &mut Query<&mut Transform, F>) {

@@ -33,6 +33,8 @@ pub struct View {
     /// Player index each human controls, if any.
     pub controlled: Vec<Option<usize>>,
     pub replay: bool,
+    /// Scorer, celebration routine and seconds into it, while one is playing.
+    pub celebration: Option<(usize, usize, f32)>,
 }
 
 impl View {
@@ -62,6 +64,7 @@ impl View {
             ball: BallView { pos: m.ball.pos, z: m.ball.z, vel: m.ball.vel },
             controlled: m.humans.iter().map(|h| Some(h.player)).collect(),
             replay: false,
+            celebration: None,
         }
     }
 }

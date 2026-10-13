@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod camera;
 pub mod career;
+pub mod celebrate;
 pub mod commentary;
 pub mod controls;
 pub mod font5x7;
@@ -142,6 +143,7 @@ impl Plugin for GamePlugin {
             .insert_resource(menu::MenuState { row: 0, dirty: true })
             .init_resource::<View>()
             .init_resource::<Replay>()
+            .init_resource::<celebrate::Celebration>()
             .add_systems(Startup, (load_fonts, audio::build_sounds))
             .add_systems(OnEnter(AppState::Title), (mark_dirty, menu_camera::<0>))
             .add_systems(OnEnter(AppState::Setup), (mark_dirty, menu_camera::<1>))
@@ -156,6 +158,7 @@ impl Plugin for GamePlugin {
                 Update,
                 (
                     step_match,
+                    celebrate::celebrations,
                     players::animate_players,
                     players::animate_officials,
                     players::animate_ball,

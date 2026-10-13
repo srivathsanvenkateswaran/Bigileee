@@ -285,6 +285,7 @@ fn motion(p: &PlayerView, phase: f32, t: f32, look: f32) -> Motion {
         look: if p.celebrating { 0.0 } else { look },
         time: t,
         flag_up: false,
+        routine: None,
     }
 }
 
@@ -306,7 +307,14 @@ pub fn animate_players(
         let target = yaw(p.facing);
         tf.rotation = tf.rotation.slerp(target, (dt * 16.0).min(1.0));
         let look = look_at(tf.rotation, p.pos, view.ball.pos);
-        let pose = humanoid::pose(motion(p, rig.phase, t + rig.idx as f32, look));
+        let mut mo = motion(p, rig.phase, t + rig.idx as f32, look);
+        if let Some((_, kind, ct)) = view.celebration.filter(|c| c.0 == rig.idx) {
+            mo.routine = Some((kind, ct));
+            if kind == 4 && ct > 1.2 {
+                tf.rotation = Quat::from_rotation_y((ct - 1.2) * 9.0);
+            }
+        }
+        let pose = humanoid::pose(mo);
         humanoid::apply(&pose, &rig.joints, &mut joints);
     }
 }
