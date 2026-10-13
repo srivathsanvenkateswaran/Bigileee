@@ -1,19 +1,12 @@
 //! Match state, rules, ball physics and player movement.
 
-use crate::audio::Sfx;
-use crate::consts::*;
-use crate::input::{Controls, Input};
-use crate::teams::{squad_names, TeamDef};
-use macroquad::prelude::*;
-use macroquad::rand::gen_range;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Role {
-    Gk,
-    Def,
-    Mid,
-    Fwd,
-}
+use super::consts::*;
+pub use super::events::Sfx;
+pub use super::formation::Role;
+use super::input::Input;
+use super::rng::gen_range;
+use super::squad::TeamSetup;
+use bevy::math::{vec2, Vec2};
 
 pub struct Player {
     pub team: usize,
@@ -30,6 +23,14 @@ pub struct Player {
     pub shooting: f32,
     pub passing: f32,
     pub defending: f32,
+    pub dribbling: f32,
+    /// Goalkeeping ability, 0..1 (only meaningful for keepers).
+    pub keeping: f32,
+    pub ovr: u8,
+    /// Index into the team's squad.
+    pub card: usize,
+    /// Counts down after a kick, for the striking animation.
+    pub kick_anim: f32,
     pub stun: f32,
     pub tackle_cd: f32,
     pub slide: f32,
@@ -110,8 +111,6 @@ pub enum Mode {
 
 #[derive(Clone)]
 pub struct MatchConfig {
-    pub home: usize,
-    pub away: usize,
     pub mode: Mode,
     pub half_secs: f32,
     /// CPU skill, 0..1.
@@ -119,7 +118,6 @@ pub struct MatchConfig {
 }
 
 pub struct Human {
-    pub controls: Controls,
     pub team: usize,
     pub player: usize,
     pub charge: f32,
@@ -128,7 +126,11 @@ pub struct Human {
 }
 
 pub struct Match {
-    pub teams: [TeamDef; 2],
+    pub teams: [TeamSetup; 2],
+    /// Shirt colour each side wears (0xRRGGBB), chosen to avoid a clash.
+    pub kit: [u32; 2],
+    /// Attackers caught offside when the last pass was played.
+    pub offside: Vec<usize>,
     pub players: Vec<Player>,
     pub ball: Ball,
     pub phase: Phase,
@@ -140,29 +142,12 @@ pub struct Match {
     pub cfg: MatchConfig,
     pub humans: Vec<Human>,
     pub banner: Option<(String, f32)>,
-    pub cam: Vec2,
-    pub paused: bool,
-    pub exit: bool,
     pub lock: Option<Lock>,
     pub setpiece_taker: Option<usize>,
     pub first_kickoff: usize,
     pub skill: [f32; 2],
     pub scorers: Vec<(usize, String, u32)>,
 }
-
-const FORMATION: [(Role, f32, f32, u8); PER_TEAM] = [
-    (Role::Gk, -50.0, 0.0, 1),
-    (Role::Def, -30.0, -22.0, 2),
-    (Role::Def, -32.0, -7.5, 5),
-    (Role::Def, -32.0, 7.5, 4),
-    (Role::Def, -30.0, 22.0, 3),
-    (Role::Mid, -13.0, -24.0, 7),
-    (Role::Mid, -15.0, -8.0, 8),
-    (Role::Mid, -15.0, 8.0, 6),
-    (Role::Mid, -13.0, 24.0, 11),
-    (Role::Fwd, 2.0, -7.0, 9),
-    (Role::Fwd, 2.0, 7.0, 10),
-];
 
 pub fn rotate_towards(cur: Vec2, want: Vec2, max_angle: f32) -> Vec2 {
     if want.length_squared() < 1e-6 {
@@ -188,33 +173,32 @@ fn gauss() -> f32 {
 }
 
 impl Match {
-    pub fn new(cfg: MatchConfig, all: &[TeamDef]) -> Match {
-        let teams = [all[cfg.home].clone(), all[cfg.away].clone()];
+    pub fn new(cfg: MatchConfig, teams: [TeamSetup; 2]) -> Match {
         let mut players = Vec::with_capacity(PLAYERS);
-        for (t, def) in teams.iter().enumerate() {
-            let names = squad_names(if t == 0 { cfg.home } else { cfg.away });
-            for (k, &(role, x, y, num)) in FORMATION.iter().enumerate() {
-                let jitter = |r: f32| (r + gen_range(-0.06, 0.06)).clamp(0.4, 0.99);
-                let (att_bonus, def_bonus) = match role {
-                    Role::Fwd => (0.06, -0.12),
-                    Role::Mid => (0.0, -0.02),
-                    Role::Def => (-0.15, 0.05),
-                    Role::Gk => (-0.3, 0.0),
-                };
+        for (t, setup) in teams.iter().enumerate() {
+            let slots = setup.slots();
+            for (k, slot) in slots.iter().enumerate() {
+                let c = &setup.squad[setup.xi[k]];
+                let f = |v: u8| v as f32 / 100.0;
                 players.push(Player {
                     team: t,
-                    num,
-                    name: names[k].clone(),
-                    role,
-                    base: vec2(x, y),
-                    pos: vec2(x, y),
+                    num: c.num,
+                    name: c.name.clone(),
+                    role: slot.role,
+                    base: slot.at,
+                    pos: slot.at,
                     vel: Vec2::ZERO,
                     facing: vec2(1.0, 0.0),
                     stamina: 1.0,
-                    pace: jitter(def.pace),
-                    shooting: jitter(def.attack + att_bonus),
-                    passing: jitter(def.passing),
-                    defending: jitter(def.defense + def_bonus),
+                    pace: f(c.pac),
+                    shooting: f(c.sho),
+                    passing: f(c.pas),
+                    defending: f(c.def),
+                    dribbling: f(c.dri),
+                    keeping: if slot.role == Role::Gk { f(c.ovr) } else { 0.0 },
+                    ovr: c.ovr,
+                    card: setup.xi[k],
+                    kick_anim: 0.0,
                     stun: 0.0,
                     tackle_cd: 0.0,
                     slide: 0.0,
@@ -226,13 +210,14 @@ impl Match {
                 });
             }
         }
+        let kit = choose_kits(&teams);
 
         let mut humans = Vec::new();
         match cfg.mode {
-            Mode::VsCpu => humans.push(Human::new(Controls::solo(), 0, 9)),
+            Mode::VsCpu => humans.push(Human::new(0, 10)),
             Mode::TwoPlayer => {
-                humans.push(Human::new(Controls::p1(), 0, 9));
-                humans.push(Human::new(Controls::p2(), 1, PER_TEAM + 9));
+                humans.push(Human::new(0, 10));
+                humans.push(Human::new(1, PER_TEAM + 10));
             }
             Mode::Watch => {}
         }
@@ -246,6 +231,8 @@ impl Match {
         let first_kickoff = if gen_range(0, 2) == 0 { 0 } else { 1 };
         let mut m = Match {
             teams,
+            kit,
+            offside: Vec::new(),
             players,
             ball: Ball {
                 pos: Vec2::ZERO,
@@ -269,9 +256,6 @@ impl Match {
             cfg,
             humans,
             banner: None,
-            cam: Vec2::ZERO,
-            paused: false,
-            exit: false,
             lock: None,
             setpiece_taker: None,
             first_kickoff,
@@ -296,7 +280,7 @@ impl Match {
 
     /// Converts between world space and a team's frame (where it attacks +x). The map is its own inverse.
     pub fn frame(&self, team: usize, v: Vec2) -> Vec2 {
-        vec2(v.x * self.dir(team), v.y)
+        v * self.dir(team)
     }
 
     pub fn opp_goal(&self, team: usize) -> Vec2 {
@@ -343,7 +327,7 @@ impl Match {
     fn choose_taker(&self, kind: Restart, team: usize, spot: Vec2) -> usize {
         let range = Self::team_range(team);
         match kind {
-            Restart::KickOff => range.start + 9,
+            Restart::KickOff => range.start + 10,
             Restart::GoalKick => Self::gk(team),
             Restart::Penalty => range
                 .skip(1)
@@ -442,7 +426,7 @@ impl Match {
             Restart::KickOff => {
                 let mut f = p.base;
                 f.x = f.x.min(-1.5);
-                if t == team && i == Self::team_range(t).start + 10 {
+                if t == team && i == Self::team_range(t).start + 9 {
                     f = vec2(-1.0, 7.0);
                 }
                 let mut w = self.frame(t, f);
@@ -564,50 +548,26 @@ impl Match {
 
     // ---------- main update ----------
 
-    pub fn update(&mut self, dt: f32, sfx: &Sfx) {
+    /// Advances the match by `dt` seconds. `inputs[k]` drives `humans[k]`.
+    pub fn update(&mut self, dt: f32, inputs: &[Input], sfx: &Sfx) {
         if let Some((_, t)) = &mut self.banner {
             *t -= dt;
             if *t <= 0.0 {
                 self.banner = None;
             }
         }
-
         if self.phase == Phase::FullTime {
-            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape) {
-                self.exit = true;
-            }
-            self.update_camera(dt);
             return;
         }
-
-        if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::P) {
-            self.paused = !self.paused;
-        }
-        if self.paused {
-            if is_key_pressed(KeyCode::Q) {
-                self.exit = true;
-            }
-            return;
-        }
-
-        let inputs: Vec<Input> = self.humans.iter().map(|h| h.controls.read()).collect();
         let steps = (dt / (1.0 / 120.0)).ceil().max(1.0) as usize;
         let h = dt / steps as f32;
         for s in 0..steps {
-            let frame_inputs: Vec<Input> =
-                inputs.iter().map(|i| if s == 0 { *i } else { i.held_only() }).collect();
+            let frame_inputs: Vec<Input> = inputs.iter().map(|i| if s == 0 { *i } else { i.held_only() }).collect();
             self.step(h, &frame_inputs, sfx);
         }
-        self.update_camera(dt);
     }
 
-    fn update_camera(&mut self, dt: f32) {
-        let lead = self.ball.vel * 0.25;
-        let target = self.ball.pos + lead;
-        self.cam += (target - self.cam) * (1.0 - (-dt * 3.5).exp());
-    }
-
-    fn step(&mut self, h: f32, inputs: &[Input], sfx: &Sfx) {
+    pub(crate)     fn step(&mut self, h: f32, inputs: &[Input], sfx: &Sfx) {
         match self.phase {
             Phase::Goal { timer } => {
                 self.ball_physics(h, true);
@@ -699,6 +659,7 @@ impl Match {
             p.stun = (p.stun - h).max(0.0);
             p.tackle_cd = (p.tackle_cd - h).max(0.0);
             p.no_touch = (p.no_touch - h).max(0.0);
+            p.kick_anim = (p.kick_anim - h).max(0.0);
             p.think -= h;
             if p.slide > 0.0 {
                 p.slide = (p.slide - h).max(0.0);
@@ -831,6 +792,14 @@ impl Match {
 
         desired[pi] = inp.dir * self.max_speed(pi, inp.sprint);
         sprint[pi] = inp.sprint;
+        if let (true, Some(c)) = (inp.contain && opp_has_ball && inp.dir.length() < 0.1, self.ball.owner) {
+            // Jockey: hold a position goal-side of the carrier.
+            let cp = self.players[c].pos;
+            let spot = cp + (self.own_goal(team) - cp).normalize_or_zero() * 1.6;
+            let to = spot - self.players[pi].pos;
+            desired[pi] = to.clamp_length_max(1.0) * self.max_speed(pi, true).min(to.length() * 3.0);
+            sprint[pi] = true;
+        }
         if has_ball && inp.dir.length() > 0.1 {
             let turn = if inp.sprint { 6.0 } else { 9.0 };
             self.players[pi].facing = rotate_towards(self.players[pi].facing, inp.dir, turn * h);
@@ -927,6 +896,7 @@ impl Match {
         self.ball.pass_target = None;
         self.ball.spin = 0.0;
         self.players[i].no_touch = 0.28;
+        self.players[i].kick_anim = 0.35;
         self.players[i].hold = 0.0;
     }
 
@@ -1008,6 +978,7 @@ impl Match {
         }
         self.ball.pass_target = receiver;
         self.ball.pass_point = target;
+        self.mark_offside(i);
         sfx.kick(if kind == PassKind::Lob { 0.5 } else { 0.3 });
 
         if let (Some(r), Some(hi)) = (receiver, self.human_of_team(t)) {
@@ -1066,7 +1037,7 @@ impl Match {
             return;
         }
         let carrier = &self.players[c];
-        let chance = (0.42 + p.defending * 0.45 - carrier.shooting * 0.2 + (self.skill[p.team] - 0.5) * 0.2)
+        let chance = (0.42 + p.defending * 0.45 - carrier.dribbling * 0.2 + (self.skill[p.team] - 0.5) * 0.2)
             .clamp(0.15, 0.85);
         let facing = p.facing;
         let team = p.team;
@@ -1272,7 +1243,7 @@ impl Match {
                 self.take_possession(g);
                 continue;
             }
-            let keeping = self.teams[team].keeping;
+            let keeping = self.players[g].keeping;
             let p = (0.3 + keeping * 0.75 - (speed - 16.0).max(0.0) * 0.022 - if diving { d / reach * 0.25 } else { 0.0 }
                 + (self.skill[team] - 0.6) * 0.15)
                 .clamp(0.08, 0.96);
@@ -1301,7 +1272,36 @@ impl Match {
         }
     }
 
+    /// Records which attackers are in an offside position as `passer` plays the ball.
+    fn mark_offside(&mut self, passer: usize) {
+        let t = self.players[passer].team;
+        let ball_x = self.frame(t, self.ball.pos).x;
+        let line = self.offside_line(t);
+        self.offside = Self::team_range(t)
+            .filter(|&j| j != passer)
+            .filter(|&j| {
+                let x = self.frame(t, self.players[j].pos).x;
+                x > 0.0 && x > ball_x + 0.3 && x > line + 0.3
+            })
+            .collect();
+    }
+
+    /// Whistles for offside if `j` is an attacker who was offside when the ball was played to them.
+    fn offside_called(&mut self, j: usize, sfx: &Sfx) -> bool {
+        let t = self.players[j].team;
+        if t != self.ball.touch_team || !self.offside.contains(&j) {
+            return false;
+        }
+        let at = self.players[j].pos;
+        let spot = vec2(at.x.clamp(-HALF_L + 1.0, HALF_L - 1.0), at.y.clamp(-HALF_W + 1.0, HALF_W - 1.0));
+        self.offside.clear();
+        self.begin_restart(Restart::FreeKick, 1 - t, spot, Some(sfx));
+        self.show(format!("OFFSIDE  ·  {}", self.players[j].name), 1.8);
+        true
+    }
+
     fn take_possession(&mut self, j: usize) {
+        self.offside.clear();
         let team = self.players[j].team;
         self.ball.owner = Some(j);
         self.ball.touch_team = team;
@@ -1332,6 +1332,10 @@ impl Match {
                 })
                 .min_by(|&a, &c| self.players[a].pos.distance(b).total_cmp(&self.players[c].pos.distance(b)));
             if let Some(j) = header {
+                if self.offside_called(j, sfx) {
+                    return;
+                }
+                self.offside.clear();
                 self.header(j, sfx);
             }
             return;
@@ -1358,6 +1362,9 @@ impl Match {
             self.ball.touch_team = team;
             self.players[j].no_touch = 0.3;
             sfx.tackle();
+            return;
+        }
+        if self.offside_called(j, sfx) {
             return;
         }
         let control = (1.0 - (rel - 15.0).max(0.0) / 14.0).clamp(0.2, 1.0);
@@ -1488,54 +1495,98 @@ impl Ball {
 }
 
 impl Human {
-    fn new(controls: Controls, team: usize, player: usize) -> Human {
-        Human { controls, team, player, charge: 0.0, charging: false, buffered: None }
+    fn new(team: usize, player: usize) -> Human {
+        Human { team, player, charge: 0.0, charging: false, buffered: None }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::teams;
+    use crate::data::types::{Club, Crest};
+    use crate::sim::rng::srand;
+
+    fn club(name: &'static str, rating: u8, formation: &'static str) -> Club {
+        Club {
+            name,
+            short: "TST",
+            home: 0xff0000,
+            trim: 0xffffff,
+            away: 0x0000ff,
+            keeper: 0x00ff00,
+            crest: Crest::Shield,
+            formation,
+            rating,
+            players: &[],
+        }
+    }
 
     /// Plays full CPU-vs-CPU matches headlessly and checks the game flows end to end.
     #[test]
     fn cpu_matches_complete() {
-        let all = teams::all();
-        let mut totals = (0, 0, 0);
+        let formations = crate::sim::formation::NAMES;
+        let (mut goals, mut shots, mut restarts) = (0, 0, 0);
         for seed in 0..6u64 {
-            macroquad::rand::srand(seed * 7919 + 1);
-            let cfg = MatchConfig { home: seed as usize * 2 % 16, away: (seed as usize * 2 + 5) % 16, mode: Mode::Watch, half_secs: 180.0, difficulty: 0.6 };
-            let mut m = Match::new(cfg, &all);
-            let sfx = Sfx::silent();
-            let h = 1.0 / 120.0;
-            let mut restarts = 0;
+            srand(seed * 7919 + 1);
+            let a = club("Home", 70 + seed as u8 * 3, formations[seed as usize % 6]);
+            let b = club("Away", 85 - seed as u8 * 3, formations[(seed as usize + 2) % 6]);
+            let teams = [TeamSetup::from_club(&a), TeamSetup::from_club(&b)];
+            let cfg = MatchConfig { mode: Mode::Watch, half_secs: 180.0, difficulty: 0.6 };
+            let mut m = Match::new(cfg, teams);
+            let sfx = Sfx::default();
             let mut was_setpiece = false;
             let mut steps = 0;
+            let mut banners: std::collections::BTreeMap<String, u32> = Default::default();
+            let mut last_banner: Option<String> = None;
+            let (mut owner_x, mut owner_n) = ([0.0f32; 2], [0.0f32; 2]);
             while m.phase != Phase::FullTime {
-                m.step(h, &[], &sfx);
+                m.step(1.0 / 120.0, &[], &sfx);
+                sfx.drain();
+                if let Some((b, _)) = &m.banner {
+                    if last_banner.as_deref() != Some(b.as_str()) {
+                        let key = b.split("  ").next().unwrap_or("").to_string();
+                        *banners.entry(key).or_insert(0) += 1;
+                        last_banner = Some(b.clone());
+                    }
+                } else {
+                    last_banner = None;
+                }
+                if let Some(o) = m.ball.owner {
+                    owner_x[m.players[o].team] += m.frame(m.players[o].team, m.ball.pos).x;
+                    owner_n[m.players[o].team] += 1.0;
+                }
                 let sp = matches!(m.phase, Phase::SetPiece { .. });
                 if sp && !was_setpiece {
                     restarts += 1;
                 }
                 was_setpiece = sp;
                 assert!(m.ball.pos.x.abs() < HALF_L + 5.0 && m.ball.pos.y.abs() < HALF_W + 5.0, "ball escaped: {:?}", m.ball.pos);
-                for p in &m.players {
-                    assert!(p.pos.is_finite());
-                }
+                assert!(m.players.iter().all(|p| p.pos.is_finite()));
                 steps += 1;
                 assert!(steps < 120 * 60 * 20, "match never finished");
             }
             println!(
-                "{} {} - {} {}  shots {:?}  restarts {}  possession {:.0}%",
-                m.teams[0].short, m.score[0], m.score[1], m.teams[1].short, m.shots, restarts,
+                "{} {}-{} {}  shots {:?}  possession {:.0}%",
+                m.teams[0].formation, m.score[0], m.score[1], m.teams[1].formation, m.shots,
                 m.possession[0] / (m.possession[0] + m.possession[1]) * 100.0
             );
-            totals.0 += m.score[0] + m.score[1];
-            totals.1 += m.shots[0] + m.shots[1];
-            totals.2 += restarts;
+            println!("   events {:?}  avg carrier x (team frame) {:.1} / {:.1}", banners, owner_x[0] / owner_n[0].max(1.0), owner_x[1] / owner_n[1].max(1.0));
+            goals += m.score[0] + m.score[1];
+            shots += m.shots[0] + m.shots[1];
         }
-        println!("goals {} shots {} restarts {}", totals.0, totals.1, totals.2);
-        assert!(totals.1 > 0, "nobody ever shot");
+        println!("goals {goals} shots {shots} restarts {restarts}");
+        assert!(shots > 0, "nobody ever shot");
     }
+}
+
+/// Home side wears its home kit; the away side switches to its change kit if the colours are too close.
+fn choose_kits(teams: &[TeamSetup; 2]) -> [u32; 2] {
+    let rgb = |c: u32| [(c >> 16 & 255) as f32, (c >> 8 & 255) as f32, (c & 255) as f32];
+    let dist = |a: u32, b: u32| {
+        let (a, b) = (rgb(a), rgb(b));
+        ((a[0] - b[0]).powi(2) * 0.3 + (a[1] - b[1]).powi(2) * 0.59 + (a[2] - b[2]).powi(2) * 0.11).sqrt()
+    };
+    let home = teams[0].home;
+    let away = if dist(home, teams[1].home) < 70.0 { teams[1].away } else { teams[1].home };
+    [home, away]
 }

@@ -1,11 +1,11 @@
 [package]
 name = "kaalpanthu"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "An original 11-a-side arcade football game for macOS, written in Rust"
+description = "A parody 3D football game for macOS, written in Rust"
 
 [dependencies]
-macroquad = { version = "0.4", features = ["audio"] }
+bevy = { version = "0.16", features = ["wav"] }
 
 [profile.dev]
 opt-level = 1
@@ -15,3 +15,4 @@ opt-level = 3
 
 [profile.release]
 lto = "thin"
+codegen-units = 4

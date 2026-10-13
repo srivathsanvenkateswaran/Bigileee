@@ -1,9 +1,9 @@
 //! Computer-controlled decisions: outfield positioning, the ball carrier, set pieces and keepers.
 
-use crate::consts::*;
-use crate::game::*;
-use macroquad::prelude::*;
-use macroquad::rand::gen_range;
+use super::consts::*;
+use super::game::*;
+use super::rng::gen_range;
+use bevy::math::{vec2, Vec2};
 
 pub struct Intent {
     pub vel: Vec2,

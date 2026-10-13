@@ -1,19 +1,8 @@
-//! Sound effects synthesized at startup, so the game ships without audio files.
+//! Sound effects synthesised at startup, so the game ships without audio files.
 
-use macroquad::audio::{load_sound_from_bytes, play_sound, stop_sound, PlaySoundParams, Sound};
 use std::f32::consts::TAU;
 
 const SR: u32 = 44_100;
-
-pub struct Sfx {
-    kick: Option<Sound>,
-    whistle: Option<Sound>,
-    whistle_long: Option<Sound>,
-    cheer: Option<Sound>,
-    crowd: Option<Sound>,
-    tackle: Option<Sound>,
-    post: Option<Sound>,
-}
 
 struct Noise(u32);
 
@@ -139,61 +128,51 @@ fn post() -> Vec<f32> {
     })
 }
 
-async fn load(samples: Vec<f32>) -> Option<Sound> {
-    load_sound_from_bytes(&wav(&samples)).await.ok()
+fn ooh() -> Vec<f32> {
+    // A crowd groan: the cheer texture with a falling, shorter envelope.
+    crowd_noise(77, 2.2, |t| (t / 0.15).min(1.0) * (-(t * 1.4)).exp() * 1.2)
 }
 
-impl Sfx {
-    /// No audio at all, for headless simulation.
-    #[cfg(test)]
-    pub fn silent() -> Sfx {
-        Sfx { kick: None, whistle: None, whistle_long: None, cheer: None, crowd: None, tackle: None, post: None }
-    }
+use crate::sim::events::SoundEvent;
+use bevy::audio::Volume;
+use bevy::prelude::*;
 
-    pub async fn load() -> Sfx {
-        Sfx {
-            kick: load(kick()).await,
-            whistle: load(whistle()).await,
-            whistle_long: load(whistle_long()).await,
-            cheer: load(cheer()).await,
-            crowd: load(crowd_loop()).await,
-            tackle: load(tackle()).await,
-            post: load(post()).await,
-        }
-    }
+#[derive(Resource)]
+pub struct Sounds {
+    kick: Handle<AudioSource>,
+    whistle: Handle<AudioSource>,
+    whistle_long: Handle<AudioSource>,
+    cheer: Handle<AudioSource>,
+    pub crowd: Handle<AudioSource>,
+    tackle: Handle<AudioSource>,
+    post: Handle<AudioSource>,
+    ooh: Handle<AudioSource>,
+}
 
-    fn play(sound: &Option<Sound>, volume: f32) {
-        if let Some(s) = sound {
-            play_sound(s, PlaySoundParams { looped: false, volume });
-        }
-    }
+pub fn build_sounds(mut commands: Commands, mut sources: ResMut<Assets<AudioSource>>) {
+    let mut add = |s: Vec<f32>| sources.add(AudioSource { bytes: wav(&s).into() });
+    commands.insert_resource(Sounds {
+        kick: add(kick()),
+        whistle: add(whistle()),
+        whistle_long: add(whistle_long()),
+        cheer: add(cheer()),
+        crowd: add(crowd_loop()),
+        tackle: add(tackle()),
+        post: add(post()),
+        ooh: add(ooh()),
+    });
+}
 
-    pub fn kick(&self, power: f32) {
-        Self::play(&self.kick, (0.25 + power * 0.6).min(1.0));
-    }
-    pub fn whistle(&self) {
-        Self::play(&self.whistle, 0.6);
-    }
-    pub fn whistle_long(&self) {
-        Self::play(&self.whistle_long, 0.6);
-    }
-    pub fn cheer(&self) {
-        Self::play(&self.cheer, 0.8);
-    }
-    pub fn tackle(&self) {
-        Self::play(&self.tackle, 0.6);
-    }
-    pub fn post(&self) {
-        Self::play(&self.post, 0.7);
-    }
-
-    pub fn crowd(&self, on: bool) {
-        if let Some(s) = &self.crowd {
-            if on {
-                play_sound(s, PlaySoundParams { looped: true, volume: 0.35 });
-            } else {
-                stop_sound(s);
-            }
-        }
-    }
+/// Plays one simulation sound event as a fire-and-forget entity.
+pub fn play(commands: &mut Commands, sounds: &Sounds, e: SoundEvent) {
+    let (handle, volume) = match e {
+        SoundEvent::Kick(p) => (&sounds.kick, 0.25 + p * 0.6),
+        SoundEvent::Whistle => (&sounds.whistle, 0.6),
+        SoundEvent::WhistleLong => (&sounds.whistle_long, 0.6),
+        SoundEvent::Cheer => (&sounds.cheer, 0.9),
+        SoundEvent::Tackle => (&sounds.tackle, 0.6),
+        SoundEvent::Post => (&sounds.post, 0.7),
+        SoundEvent::Ooh => (&sounds.ooh, 0.7),
+    };
+    commands.spawn((AudioPlayer::new(handle.clone()), PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume.min(1.0)))));
 }
