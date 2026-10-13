@@ -367,6 +367,11 @@ pub static LEAGUE: League = League {
                 p("Elvis Parsley", CAM, 10, [73, 71, 74, 80, 78, 39, 60]),
                 p("Dada Bellpepper", LW, 11, [70, 81, 65, 67, 71, 28, 59]),
                 p("Pedro Raulipoli", ST, 9, [73, 72, 78, 65, 69, 27, 83]),
+                p("Lucas Halva", CB, 3, [70, 62, 38, 60, 56, 71, 72]),
+                p("Danilo Barcelolly", LB, 6, [69, 66, 62, 70, 66, 64, 66]),
+                p("Auremeringue", CDM, 5, [68, 60, 52, 64, 62, 68, 72]),
+                p("Fellipe Pastos", CM, 8, [69, 55, 68, 72, 67, 60, 70]),
+                p("Nicoleslaw", ST, 19, [68, 68, 70, 56, 66, 24, 72]),
             ],
         },
         Club {
@@ -391,6 +396,9 @@ pub static LEAGUE: League = League {
                 p("Almondrandro", ST, 19, [69, 68, 73, 57, 65, 26, 72]),
                 p("Hyorange", CAM, 10, [71, 67, 71, 73, 72, 34, 60]),
                 p("Sorrisotto", RW, 17, [70, 80, 68, 65, 75, 29, 58]),
+                p("Julio Caesar Salad", GK, 12, [68, 68, 67, 63, 69, 40, 70]),
+                p("Rauliflower", CM, 25, [69, 62, 62, 70, 67, 64, 70]),
+                p("Praxedonut", CM, 18, [69, 66, 63, 71, 72, 55, 63]),
             ],
         },
         Club {
@@ -413,6 +421,9 @@ pub static LEAGUE: League = League {
                 p("Igor Piexao", LW, 7, [70, 80, 66, 67, 72, 30, 57]),
                 p("Leo Garlicalho", ST, 9, [70, 60, 75, 59, 70, 24, 69]),
                 p("Adrian Marzipanez", ST, 19, [69, 70, 74, 59, 68, 25, 72]),
+                p("Matheus Alexandill", RB, 22, [67, 74, 48, 63, 66, 63, 65]),
+                p("Matheus Bianquiche", CM, 20, [68, 64, 63, 69, 69, 58, 66]),
+                p("Regisotto", CM, 14, [68, 60, 66, 71, 69, 52, 64]),
             ],
         },
         Club {
@@ -434,6 +445,8 @@ pub static LEAGUE: League = League {
                 p("Andre Lettuce", ST, 9, [68, 67, 70, 56, 68, 22, 69]),
                 p("Dijonverson", ST, 18, [72, 68, 77, 61, 70, 27, 78]),
                 p("Alessauce", LW, 11, [69, 83, 66, 67, 73, 29, 55]),
+                p("Ranjelly", CDM, 23, [69, 63, 55, 66, 64, 70, 73]),
+                p("Valdivanilla", CAM, 7, [69, 70, 66, 70, 74, 32, 56]),
             ],
         },
         Club {
@@ -471,6 +484,9 @@ pub static LEAGUE: League = League {
                 p("Shaylonion", CAM, 20, [70, 70, 68, 70, 72, 37, 57]),
                 p("Wellington Ratatouille", RW, 7, [72, 82, 68, 69, 76, 33, 62]),
                 p("Diego Churro", ST, 9, [70, 68, 73, 58, 67, 26, 76]),
+                p("Dudoughnut", RB, 2, [69, 74, 52, 66, 68, 64, 67]),
+                p("Edson Fernandough", CDM, 5, [68, 58, 55, 64, 60, 70, 73]),
+                p("Gabriel Baralhashbrown", CDM, 15, [69, 63, 60, 68, 66, 67, 70]),
             ],
         },
         Club {
@@ -483,6 +499,7 @@ pub static LEAGUE: League = League {
             players: &[
                 p("Vladimiso", GK, 1, [70, 73, 67, 66, 73, 41, 72]),
                 p("Biscolli", ST, 9, [69, 67, 71, 59, 66, 24, 69]),
+                p("Jean Clebernaise", CM, 8, [68, 60, 62, 69, 66, 62, 70]),
             ],
         },
         Club {
@@ -492,7 +509,12 @@ pub static LEAGUE: League = League {
             crest: Crest::Stripes,
             formation: "4-4-2",
             rating: 67,
-            players: &[],
+            players: &[
+                p("Marcelo Carnitas", GK, 1, [68, 69, 67, 64, 70, 40, 68]),
+                p("Jadsorbet", CDM, 5, [67, 58, 54, 64, 61, 68, 71]),
+                p("Chicochip", CM, 8, [66, 62, 60, 67, 66, 58, 65]),
+                p("Isidro Pittabread", ST, 9, [68, 69, 70, 55, 65, 25, 74]),
+            ],
         },
     ],
 };

@@ -192,6 +192,7 @@ pub static LEAGUE: League = League {
                 p("Tammy Abracadabra-ham", ST, 9, [82, 81, 83, 68, 76, 32, 81]),
                 p("Eldor Showmurodov", ST, 14, [74, 73, 73, 60, 71, 27, 72]),
                 p("Felix Afena-Gain", ST, 64, [66, 68, 71, 54, 62, 20, 66]),
+                p("Pietro Boerewors", GK, 63, [62, 62, 60, 58, 64, 38, 60]),
             ],
         },
         Club {
@@ -252,6 +253,7 @@ pub static LEAGUE: League = League {
                 p("Jeremie Bogey", LW, 10, [77, 85, 72, 72, 86, 29, 58]),
                 p("Luis Mural", ST, 9, [83, 87, 85, 74, 81, 35, 83]),
                 p("Duvan Zapizza", ST, 91, [84, 86, 87, 73, 83, 36, 89]),
+                p("Teun Cupcakeiners", CM, 4, [79, 70, 77, 86, 81, 73, 74]),
             ],
         },
         Club {
@@ -384,6 +386,14 @@ pub static LEAGUE: League = League {
                 p("Riccardo Orzolini", RW, 7, [78, 92, 72, 73, 83, 31, 65]),
                 p("Musa Wheelbarrow", ST, 99, [76, 75, 81, 62, 69, 29, 77]),
                 p("Marko Arnaughtyvic", ST, 9, [80, 83, 81, 66, 77, 32, 85]),
+                p("Francesco Bardolino", GK, 1, [69, 70, 68, 62, 71, 40, 68]),
+                p("Kevin Bonfire-zi", CB, 4, [73, 66, 34, 56, 54, 74, 74]),
+                p("Mitchell Dips", LWB, 22, [72, 73, 50, 68, 66, 68, 75]),
+                p("Ibrahima M'Baguette", RB, 15, [70, 70, 40, 60, 60, 70, 70]),
+                p("Michel Aebiscuit", CM, 20, [75, 68, 66, 75, 74, 66, 72]),
+                p("Nicola Ravi-ola", CM, 27, [72, 58, 68, 76, 73, 56, 62]),
+                p("Emanuel Vinegarto", CAM, 24, [70, 74, 64, 70, 76, 32, 55]),
+                p("Andreas Scoff Olsen", RW, 11, [74, 79, 72, 71, 76, 33, 60]),
             ],
         },
         Club {
@@ -410,6 +420,7 @@ pub static LEAGUE: League = League {
                 p("Federico Di Frisco", LW, 17, [71, 78, 68, 64, 70, 25, 53]),
                 p("Andrea Pinacolonti", ST, 99, [76, 80, 78, 63, 74, 24, 75]),
                 p("Patrick Cutlery", ST, 23, [73, 72, 78, 59, 72, 26, 74]),
+                p("Samir Ujkannoli", GK, 1, [68, 67, 67, 61, 70, 36, 69]),
             ],
         },
         Club {
@@ -487,6 +498,14 @@ pub static LEAGUE: League = League {
                 p("Federico Bonazzolio", ST, 9, [73, 73, 78, 58, 66, 22, 73]),
                 p("Milan Jury-ic", ST, 11, [70, 71, 69, 55, 65, 20, 76]),
                 p("Simy Simmer", ST, 99, [71, 69, 75, 60, 70, 23, 69]),
+                p("Vid Bellini", GK, 1, [70, 72, 68, 62, 72, 40, 70]),
+                p("Wajdi Ketchrida", RB, 2, [70, 78, 45, 64, 67, 66, 66]),
+                p("Dylan Bran", CB, 4, [72, 66, 36, 58, 56, 73, 75]),
+                p("Ivan Raviolovic", CDM, 6, [71, 52, 55, 70, 66, 70, 72]),
+                p("Matteo Ruggelach", LWB, 33, [70, 75, 46, 66, 68, 65, 67]),
+                p("Francesco Di Taco-chio", CDM, 21, [69, 55, 56, 67, 65, 68, 72]),
+                p("Emil Bowlhinen", CM, 8, [70, 64, 63, 71, 71, 58, 67]),
+                p("Diego Pestotti", LW, 10, [73, 66, 71, 76, 78, 30, 58]),
             ],
         },
         Club {

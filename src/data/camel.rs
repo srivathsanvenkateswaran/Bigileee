@@ -55,6 +55,9 @@ pub static LEAGUE: League = League {
                 p("Romarinara", RW, 7, [76, 83, 71, 76, 80, 38, 64]),
                 p("Fahad Al-Muffallad", LW, 19, [71, 83, 67, 66, 76, 31, 61]),
                 p("Abdulrahman Al-About", LW, 11, [68, 75, 64, 63, 69, 30, 57]),
+                p("Ziyad Al-Safari", CB, 3, [70, 64, 35, 56, 52, 71, 74]),
+                p("Hamed Al-Gumdrop", CM, 14, [70, 68, 62, 68, 70, 60, 64]),
+                p("Ahmed Bam-salad", RB, 12, [68, 74, 45, 63, 64, 64, 66]),
             ],
         },
         Club {
@@ -100,6 +103,8 @@ pub static LEAGUE: League = League {
                 p("Cristian Guacamola", RW, 29, [76, 83, 71, 78, 79, 38, 65]),
                 p("Carlos Juniper", ST, 9, [76, 76, 78, 68, 72, 33, 77]),
                 p("Turki Al-Hammer", LW, 11, [70, 78, 67, 69, 72, 29, 60]),
+                p("Hattan Bah-cherry", RW, 17, [72, 76, 70, 72, 75, 34, 60]),
+                p("Fawaz Al-Scoops", RB, 2, [68, 73, 44, 64, 64, 65, 65]),
             ],
         },
         Club {
@@ -112,6 +117,8 @@ pub static LEAGUE: League = League {
             players: &[
                 p("Leandre Tamalemba", ST, 9, [73, 69, 77, 64, 70, 26, 83]),
                 p("Cedric Amiso", RW, 7, [70, 74, 65, 65, 73, 31, 56]),
+                p("Alvaro Med-bran", CM, 8, [72, 64, 66, 74, 73, 58, 62]),
+                p("Aschraf El Mahdonut", CDM, 6, [71, 62, 60, 72, 70, 67, 68]),
             ],
         },
         Club {
@@ -137,6 +144,7 @@ pub static LEAGUE: League = League {
             rating: 69,
             players: &[
                 p("Vladimir Stockpotovic", GK, 1, [71, 72, 72, 67, 75, 43, 70]),
+                p("Ricardo Thriller", CM, 8, [70, 66, 64, 70, 69, 63, 72]),
             ],
         },
         Club {
@@ -220,6 +228,8 @@ pub static LEAGUE: League = League {
                 p("Ali Al-Asmarinade", CDM, 6, [67, 58, 53, 66, 60, 69, 70]),
                 p("Omar Al-Sumac", ST, 9, [74, 72, 76, 64, 72, 27, 80]),
                 p("Haitham A-Cherry", ST, 11, [67, 68, 71, 56, 67, 21, 69]),
+                p("Ezgjan Aioli-ski", LB, 10, [73, 78, 64, 70, 74, 62, 68]),
+                p("Mohammed Al-Fatoosh", CB, 4, [68, 58, 34, 55, 52, 69, 72]),
             ],
         },
         Club {
