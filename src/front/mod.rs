@@ -169,6 +169,7 @@ fn setup_match(
         mode: settings.mode,
         half_secs: menu::HALVES[settings.half].1,
         difficulty: menu::LEVELS[settings.level].1,
+        knockout: false,
     };
     let m = Match::new(cfg, [settings.home_team.clone(), settings.away_team.clone()]);
     let league = data::leagues()[settings.home.0].name.to_uppercase();

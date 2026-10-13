@@ -13,10 +13,32 @@ pub enum SoundEvent {
     Ooh,
 }
 
-/// Collects sound events during a step; the front end drains them each frame.
+/// Things worth a line of commentary.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Call {
+    KickOff,
+    HalfTime,
+    FullTime,
+    Goal { scorer: String, team: usize, own_goal: bool },
+    Shot { player: String },
+    Save { keeper: String },
+    Miss { player: String },
+    Woodwork { player: String },
+    Tackle { player: String },
+    Foul { by: String },
+    Card { player: String, red: bool },
+    Offside { player: String },
+    Corner,
+    Penalty,
+    Sub { off: String, on: String },
+    Shootout { player: String, scored: bool },
+}
+
+/// Collects sound and commentary events during a step; the front end drains them each frame.
 #[derive(Default)]
 pub struct Sfx {
     events: Mutex<Vec<SoundEvent>>,
+    calls: Mutex<Vec<Call>>,
 }
 
 impl Sfx {
@@ -43,6 +65,12 @@ impl Sfx {
     }
     pub fn ooh(&self) {
         self.push(SoundEvent::Ooh);
+    }
+    pub fn call(&self, c: Call) {
+        self.calls.lock().unwrap().push(c);
+    }
+    pub fn drain_calls(&self) -> Vec<Call> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
     }
     pub fn drain(&self) -> Vec<SoundEvent> {
         std::mem::take(&mut *self.events.lock().unwrap())

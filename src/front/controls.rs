@@ -1,7 +1,6 @@
 //! Keyboard and gamepad bindings. Directions are made camera-relative, so "up" always pushes
 //! a player away from the screen whichever camera is active.
 
-use super::camera::MainCam;
 use crate::sim::input::Input;
 use bevy::input::gamepad::{Gamepad, GamepadButton};
 use bevy::prelude::*;

@@ -1,7 +1,7 @@
 //! Match state, rules, ball physics and player movement.
 
 use super::consts::*;
-pub use super::events::Sfx;
+pub use super::events::{Call, Sfx};
 pub use super::formation::Role;
 use super::input::Input;
 use super::rng::gen_range;
@@ -41,6 +41,10 @@ pub struct Player {
     /// Seconds a goalkeeper has been holding the ball.
     pub hold: f32,
     pub think: f32,
+    /// Ceiling that stamina recovers to; it falls over the match.
+    pub fitness: f32,
+    pub yellows: u8,
+    pub sent_off: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,7 +63,41 @@ pub enum Phase {
     Play,
     Goal { timer: f32 },
     HalfTime { timer: f32 },
+    /// A beat between shootout kicks.
+    ShootoutPause { timer: f32 },
     FullTime,
+}
+
+/// Penalty shootout state for knockout matches that end level.
+#[derive(Clone, Default, Debug)]
+pub struct Shootout {
+    pub kicks: [Vec<bool>; 2],
+    pub next: usize,
+    order: [Vec<usize>; 2],
+    kick_timer: f32,
+    pub winner: Option<usize>,
+}
+
+impl Shootout {
+    pub fn goals(&self, t: usize) -> usize {
+        self.kicks[t].iter().filter(|k| **k).count()
+    }
+
+    fn decided(&self) -> Option<usize> {
+        let (a, b) = (self.goals(0), self.goals(1));
+        let (n0, n1) = (self.kicks[0].len(), self.kicks[1].len());
+        if n0 <= 5 && n1 <= 5 {
+            let left0 = 5 - n0;
+            let left1 = 5 - n1;
+            if a + left0 < b {
+                return Some(1);
+            }
+            if b + left1 < a {
+                return Some(0);
+            }
+        }
+        (n0 == n1 && n0 >= 5 && a != b).then(|| if a > b { 0 } else { 1 })
+    }
 }
 
 /// A restart in progress: the taker owns the ball and may not dribble until it is played.
@@ -115,6 +153,8 @@ pub struct MatchConfig {
     pub half_secs: f32,
     /// CPU skill, 0..1.
     pub difficulty: f32,
+    /// Cup ties go to penalties if level at full time.
+    pub knockout: bool,
 }
 
 pub struct Human {
@@ -131,6 +171,13 @@ pub struct Match {
     pub kit: [u32; 2],
     /// Attackers caught offside when the last pass was played.
     pub offside: Vec<usize>,
+    pub shootout: Option<Shootout>,
+    pub subs_left: [u8; 2],
+    /// Squad indices that have been substituted off (they can't come back on).
+    pub subbed_off: [Vec<usize>; 2],
+    pub cards: Vec<(usize, String, bool, u32)>,
+    /// Display minutes at which the CPU has already reviewed substitutions.
+    cpu_sub_checks: [bool; 3],
     pub players: Vec<Player>,
     pub ball: Ball,
     pub phase: Phase,
@@ -154,7 +201,7 @@ pub fn rotate_towards(cur: Vec2, want: Vec2, max_angle: f32) -> Vec2 {
         return cur;
     }
     let want = want.normalize();
-    let angle = cur.angle_between(want);
+    let angle = cur.angle_to(want);
     if angle.abs() <= max_angle {
         want
     } else {
@@ -207,6 +254,9 @@ impl Match {
                     no_touch: 0.0,
                     hold: 0.0,
                     think: gen_range(0.0, 0.3),
+                    fitness: 1.0,
+                    yellows: 0,
+                    sent_off: false,
                 });
             }
         }
@@ -233,6 +283,11 @@ impl Match {
             teams,
             kit,
             offside: Vec::new(),
+            shootout: None,
+            subs_left: [5, 5],
+            subbed_off: [Vec::new(), Vec::new()],
+            cards: Vec::new(),
+            cpu_sub_checks: [false; 3],
             players,
             ball: Ball {
                 pos: Vec2::ZERO,
@@ -325,16 +380,22 @@ impl Match {
     // ---------- restarts ----------
 
     fn choose_taker(&self, kind: Restart, team: usize, spot: Vec2) -> usize {
+        if let Some(sh) = &self.shootout {
+            let order = &sh.order[team];
+            return order[sh.kicks[team].len() % order.len()];
+        }
         let range = Self::team_range(team);
         match kind {
-            Restart::KickOff => range.start + 10,
+            Restart::KickOff if !self.players[range.start + 10].sent_off => range.start + 10,
             Restart::GoalKick => Self::gk(team),
             Restart::Penalty => range
                 .skip(1)
+                .filter(|&j| !self.players[j].sent_off)
                 .max_by(|&a, &b| self.players[a].shooting.total_cmp(&self.players[b].shooting))
                 .unwrap(),
             _ => range
                 .skip(1)
+                .filter(|&j| !self.players[j].sent_off)
                 .min_by(|&a, &b| {
                     self.players[a].pos.distance(spot).total_cmp(&self.players[b].pos.distance(spot))
                 })
@@ -376,6 +437,13 @@ impl Match {
         if let (Some(s), Restart::FreeKick | Restart::Penalty) = (sfx, kind) {
             s.whistle();
         }
+        if let Some(s) = sfx {
+            match kind {
+                Restart::Corner => s.call(Call::Corner),
+                Restart::Penalty if self.shootout.is_none() => s.call(Call::Penalty),
+                _ => {}
+            }
+        }
 
         // Hand human control to the taker, or to the defender nearest the ball.
         for h in 0..self.humans.len() {
@@ -395,7 +463,7 @@ impl Match {
     fn nearest_outfield(&self, team: usize, to: Vec2, exclude: Option<usize>) -> usize {
         Self::team_range(team)
             .skip(1)
-            .filter(|&j| Some(j) != exclude)
+            .filter(|&j| Some(j) != exclude && !self.players[j].sent_off)
             .min_by(|&a, &b| self.players[a].pos.distance(to).total_cmp(&self.players[b].pos.distance(to)))
             .unwrap()
     }
@@ -405,6 +473,9 @@ impl Match {
         let t = p.team;
         let d = self.dir(t);
         let face_goal = vec2(d, 0.0);
+        if p.sent_off {
+            return (p.pos, face_goal);
+        }
 
         if Some(i) == self.setpiece_taker {
             let approach = match kind {
@@ -543,7 +614,7 @@ impl Match {
         if self.ball.owner == Some(i) {
             s *= 0.88;
         }
-        s * (0.94 + self.skill[p.team] * 0.1)
+        s * (0.94 + self.skill[p.team] * 0.1) * (0.82 + 0.18 * p.stamina)
     }
 
     // ---------- main update ----------
@@ -626,11 +697,26 @@ impl Match {
                     self.lock = Some(Lock { taker, kind, team, spot, t: 0.0 });
                     self.phase = Phase::Play;
                     if kind == Restart::KickOff {
+                        sfx.call(Call::KickOff);
                         sfx.whistle();
                     }
                 }
             }
             Phase::Play => self.play_step(h, inputs, sfx),
+            Phase::ShootoutPause { timer } => {
+                self.ball_physics(h, true);
+                let timer = timer - h;
+                if timer > 0.0 {
+                    self.phase = Phase::ShootoutPause { timer };
+                } else if let Some(w) = self.shootout.as_ref().and_then(|sh| sh.winner) {
+                    self.phase = Phase::FullTime;
+                    self.show(format!("{} WIN ON PENALTIES", self.teams[w].name.to_uppercase()), 1000.0);
+                    sfx.whistle_long();
+                    sfx.call(Call::FullTime);
+                } else {
+                    self.next_penalty(sfx);
+                }
+            }
             Phase::FullTime => {}
         }
     }
@@ -652,7 +738,21 @@ impl Match {
     }
 
     fn play_step(&mut self, h: f32, inputs: &[Input], sfx: &Sfx) {
-        self.clock += h;
+        if self.shootout.is_none() {
+            self.clock += h;
+        }
+        // Fitness falls by about a third over 90 minutes, faster for players who sprint a lot.
+        let decay = h * 0.32 / (2.0 * self.cfg.half_secs);
+        for p in &mut self.players {
+            p.fitness = (p.fitness - decay * (0.7 + (1.0 - p.stamina))).max(0.4);
+        }
+        let (min, _) = self.display_minute();
+        for (k, at) in [60u32, 70, 80].iter().enumerate() {
+            if min >= *at && !self.cpu_sub_checks[k] {
+                self.cpu_sub_checks[k] = true;
+                self.cpu_substitutions(sfx, 2);
+            }
+        }
         let pt = self.possession_team();
         self.possession[pt] += h;
         for p in &mut self.players {
@@ -705,6 +805,13 @@ impl Match {
         if let Some(l) = self.lock {
             desired[l.taker] = Vec2::ZERO;
         }
+        if self.shootout.is_some() {
+            for i in 0..PLAYERS {
+                if self.players[i].role != Role::Gk && self.ball.kicker != Some(i) && self.lock.map_or(true, |l| l.taker != i) {
+                    desired[i] = Vec2::ZERO;
+                }
+            }
+        }
         self.move_players(h, &desired, &sprint, self.lock);
 
         for (i, a) in actions {
@@ -722,13 +829,24 @@ impl Match {
         self.update_ownership_locks(h);
         self.check_bounds(prev, prev_z, sfx);
 
+        if self.shootout.is_some() {
+            if self.phase == Phase::Play {
+                self.shootout_watch(h, sfx);
+            }
+            return;
+        }
         if self.phase == Phase::Play && self.clock >= self.cfg.half_secs {
             sfx.whistle_long();
             if self.half == 1 {
                 self.phase = Phase::HalfTime { timer: 3.5 };
+                sfx.call(Call::HalfTime);
                 self.show("HALF TIME", 3.5);
+            } else if self.cfg.knockout && self.score[0] == self.score[1] {
+                self.start_shootout(sfx);
+                return;
             } else {
                 self.phase = Phase::FullTime;
+                sfx.call(Call::FullTime);
                 self.show("FULL TIME", 1000.0);
             }
             self.ball.owner = None;
@@ -1024,6 +1142,7 @@ impl Match {
         self.ball.spin = gauss() * 1.5;
         self.shots[t] += 1;
         sfx.kick(0.6 + power * 0.4);
+        sfx.call(Call::Shot { player: self.players[i].name.clone() });
     }
 
     fn do_tackle(&mut self, i: usize, sfx: &Sfx) {
@@ -1050,6 +1169,9 @@ impl Match {
             self.players[c].stun = 0.45;
             self.players[c].no_touch = 0.35;
             sfx.tackle();
+            sfx.call(Call::Tackle { player: self.players[i].name.clone() });
+        } else if self.shootout.is_none() && gen_range(0.0, 1.0) < 0.16 {
+            self.foul(i, c, sfx);
         } else {
             self.players[i].stun = 0.45;
         }
@@ -1084,22 +1206,206 @@ impl Match {
             // Clattering the man before the ball is a foul.
             if let Some(c) = self.ball.owner {
                 if self.players[c].team != team && self.players[c].pos.distance(p.pos) < 0.95 {
-                    let spot = self.players[c].pos;
-                    let fouled = self.players[c].team;
                     self.players[i].slide_hit = true;
-                    self.players[c].stun = 0.8;
-                    sfx.tackle();
-                    if self.in_box(team, spot) {
-                        let pen = self.own_goal(team) + vec2(PEN_SPOT * self.dir(team), 0.0);
-                        self.begin_restart(Restart::Penalty, fouled, pen, Some(sfx));
-                    } else {
-                        let spot = vec2(spot.x.clamp(-HALF_L + 1.0, HALF_L - 1.0), spot.y.clamp(-HALF_W + 1.0, HALF_W - 1.0));
-                        self.begin_restart(Restart::FreeKick, fouled, spot, Some(sfx));
-                    }
-                    self.show("FOUL!", 1.2);
+                    self.foul(i, c, sfx);
                     return;
                 }
             }
+        }
+    }
+
+    /// Whistles a foul by `i` on `c`: card if deserved, then a free kick or penalty.
+    fn foul(&mut self, i: usize, c: usize, sfx: &Sfx) {
+        let team = self.players[i].team;
+        let spot = self.players[c].pos;
+        let fouled = self.players[c].team;
+        self.players[c].stun = 0.8;
+        sfx.tackle();
+        sfx.call(Call::Foul { by: self.players[i].name.clone() });
+        let card = self.book(i, c, sfx);
+        if self.in_box(team, spot) {
+            let pen = self.own_goal(team) + vec2(PEN_SPOT * self.dir(team), 0.0);
+            self.begin_restart(Restart::Penalty, fouled, pen, Some(sfx));
+        } else {
+            let spot = vec2(spot.x.clamp(-HALF_L + 1.0, HALF_L - 1.0), spot.y.clamp(-HALF_W + 1.0, HALF_W - 1.0));
+            self.begin_restart(Restart::FreeKick, fouled, spot, Some(sfx));
+        }
+        match card {
+            Some((name, true)) => self.show(format!("RED CARD  ·  {name}"), 2.4),
+            Some((name, false)) => self.show(format!("YELLOW CARD  ·  {name}"), 2.0),
+            None => self.show("FOUL!", 1.2),
+        }
+    }
+
+    /// Decides whether a foul by `i` on `c` earns a card, applies it, and returns (name, red).
+    fn book(&mut self, i: usize, c: usize, sfx: &Sfx) -> Option<(String, bool)> {
+        let fouled = self.players[c].team;
+        let from_behind = self.players[i].facing.dot(self.players[c].facing) > 0.4;
+        let at = self.frame(fouled, self.players[c].pos);
+        // Denying a clear chance: central, in range, and at most one defender goal-side.
+        let cover = Self::team_range(1 - fouled)
+            .skip(1)
+            .filter(|&j| j != i && !self.players[j].sent_off && self.frame(fouled, self.players[j].pos).x > at.x)
+            .count();
+        let clear_chance = at.x > 18.0 && at.y.abs() < 20.0 && cover <= 1;
+        let roll = gen_range(0.0, 1.0);
+        let (yellow, red) = if clear_chance {
+            (roll < 0.9, roll < 0.55)
+        } else if from_behind {
+            (roll < 0.6, roll < 0.04)
+        } else {
+            (roll < 0.25, roll < 0.01)
+        };
+        if !yellow && !red {
+            return None;
+        }
+        let p = &mut self.players[i];
+        let red = red || {
+            p.yellows += 1;
+            p.yellows >= 2
+        };
+        let name = p.name.clone();
+        let (min, _) = self.display_minute();
+        self.cards.push((self.players[i].team, name.clone(), red, min + 1));
+        sfx.call(Call::Card { player: name.clone(), red });
+        if red {
+            self.send_off(i);
+        }
+        Some((name, red))
+    }
+
+    fn send_off(&mut self, i: usize) {
+        let p = &mut self.players[i];
+        p.sent_off = true;
+        p.pos = vec2(0.0, 300.0);
+        p.vel = Vec2::ZERO;
+        if self.ball.owner == Some(i) {
+            self.ball.owner = None;
+        }
+        let team = self.players[i].team;
+        for h in 0..self.humans.len() {
+            if self.humans[h].player == i {
+                self.humans[h].player = self.nearest_outfield(team, self.ball.pos, Some(i));
+            }
+        }
+    }
+
+    /// Squad indices available to come on for `team`.
+    pub fn bench(&self, team: usize) -> Vec<usize> {
+        let on: Vec<usize> = Self::team_range(team).map(|j| self.players[j].card).collect();
+        (0..self.teams[team].squad.len())
+            .filter(|k| !on.contains(k) && !self.subbed_off[team].contains(k))
+            .collect()
+    }
+
+    /// Replaces player `i` with squad member `card`. Returns false if not allowed.
+    pub fn substitute(&mut self, i: usize, card: usize, sfx: &Sfx) -> bool {
+        let t = self.players[i].team;
+        if self.subs_left[t] == 0 || self.players[i].sent_off || !self.bench(t).contains(&card) {
+            return false;
+        }
+        let c = self.teams[t].squad[card].clone();
+        let f = |v: u8| v as f32 / 100.0;
+        let off = self.players[i].card;
+        let p = &mut self.players[i];
+        let old_name = std::mem::replace(&mut p.name, c.name.clone());
+        p.num = c.num;
+        p.pace = f(c.pac);
+        p.shooting = f(c.sho);
+        p.passing = f(c.pas);
+        p.defending = f(c.def);
+        p.dribbling = f(c.dri);
+        if p.role == Role::Gk {
+            p.keeping = f(c.ovr);
+        }
+        p.ovr = c.ovr;
+        p.card = card;
+        p.stamina = 1.0;
+        p.fitness = 1.0;
+        p.yellows = 0;
+        self.subbed_off[t].push(off);
+        self.subs_left[t] -= 1;
+        self.show(format!("SUB  ·  {} on, {} off", c.name, old_name), 2.0);
+        sfx.call(Call::Sub { off: old_name, on: c.name });
+        true
+    }
+
+    /// The CPU replaces its most tired outfield players with like-for-like bench players.
+    fn cpu_substitutions(&mut self, sfx: &Sfx, count: usize) {
+        for t in 0..2 {
+            if self.human_of_team(t).is_some() {
+                continue;
+            }
+            for _ in 0..count {
+                let tired = Self::team_range(t)
+                    .skip(1)
+                    .filter(|&j| !self.players[j].sent_off && self.players[j].fitness < 0.8)
+                    .min_by(|&a, &b| self.players[a].fitness.total_cmp(&self.players[b].fitness));
+                let Some(i) = tired else { break };
+                let want = self.teams[t].slots()[i - t * PER_TEAM].pos;
+                let best = self.bench(t).into_iter().max_by_key(|&k| {
+                    let c = &self.teams[t].squad[k];
+                    c.ovr as i32 - super::squad::fit_penalty(want, c.pos) - if c.pos == crate::data::types::Pos::GK { 100 } else { 0 }
+                });
+                match best {
+                    Some(k) if self.substitute(i, k, sfx) => {}
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    fn start_shootout(&mut self, sfx: &Sfx) {
+        let order = |t: usize| {
+            let mut v: Vec<usize> = Self::team_range(t).skip(1).filter(|&j| !self.players[j].sent_off).collect();
+            v.sort_by(|&a, &b| self.players[b].shooting.total_cmp(&self.players[a].shooting));
+            v
+        };
+        self.shootout = Some(Shootout { order: [order(0), order(1)], next: gen_range(0, 2), ..default_shootout() });
+        self.show("PENALTIES", 2.5);
+        sfx.whistle_long();
+        self.phase = Phase::ShootoutPause { timer: 2.5 };
+    }
+
+    fn next_penalty(&mut self, sfx: &Sfx) {
+        let Some(sh) = &mut self.shootout else { return };
+        sh.kick_timer = 0.0;
+        let team = sh.next;
+        let spot = self.own_goal(1 - team) + vec2(PEN_SPOT * self.dir(1 - team), 0.0);
+        self.begin_restart(Restart::Penalty, team, spot, Some(sfx));
+    }
+
+    fn shootout_result(&mut self, scored: bool, sfx: &Sfx) {
+        let Some(team) = self.shootout.as_ref().map(|sh| sh.next) else { return };
+        let taker = self.ball.kicker.unwrap_or(0);
+        let name = self.players[taker].name.clone();
+        let sh = self.shootout.as_mut().unwrap();
+        sh.kicks[team].push(scored);
+        sh.next = 1 - team;
+        sh.winner = sh.decided();
+        self.lock = None;
+        self.ball.owner = None;
+        self.show(if scored { format!("SCORED  ·  {name}") } else { format!("MISSED  ·  {name}") }, 1.6);
+        sfx.call(Call::Shootout { player: name, scored });
+        if scored {
+            sfx.cheer();
+        } else {
+            sfx.ooh();
+        }
+        self.phase = Phase::ShootoutPause { timer: 2.0 };
+    }
+
+    /// Watches a shootout kick after it is struck and settles it as a miss if it doesn't go in.
+    fn shootout_watch(&mut self, h: f32, sfx: &Sfx) {
+        let Some(sh) = &mut self.shootout else { return };
+        if self.lock.is_some() {
+            return;
+        }
+        sh.kick_timer += h;
+        let t = sh.kick_timer;
+        let saved = self.ball.owner.is_some() || (!self.ball.shot && t > 0.1);
+        if saved || t > 3.0 || (t > 0.5 && self.ball.vel.length() < 0.3) {
+            self.shootout_result(false, sfx);
         }
     }
 
@@ -1107,6 +1413,9 @@ impl Match {
 
     fn move_players(&mut self, h: f32, desired: &[Vec2], sprint: &[bool], lock: Option<Lock>) {
         for i in 0..PLAYERS {
+            if self.players[i].sent_off {
+                continue;
+            }
             let owner = self.ball.owner == Some(i);
             let p = &mut self.players[i];
             if p.slide > 0.0 {
@@ -1131,7 +1440,7 @@ impl Match {
             if sprint[i] && p.vel.length() > 6.5 {
                 p.stamina = (p.stamina - 0.07 * h).max(0.0);
             } else {
-                p.stamina = (p.stamina + 0.03 * h).min(1.0);
+                p.stamina = (p.stamina + 0.03 * h).min(p.fitness);
             }
         }
 
@@ -1261,6 +1570,8 @@ impl Match {
                     self.players[g].no_touch = 0.45;
                     sfx.tackle();
                 }
+                sfx.call(Call::Save { keeper: self.players[g].name.clone() });
+                sfx.ooh();
                 if self.ball.owner == Some(g) {
                     self.show("SAVE!", 1.0);
                 } else {
@@ -1297,6 +1608,7 @@ impl Match {
         self.offside.clear();
         self.begin_restart(Restart::FreeKick, 1 - t, spot, Some(sfx));
         self.show(format!("OFFSIDE  ·  {}", self.players[j].name), 1.8);
+        sfx.call(Call::Offside { player: self.players[j].name.clone() });
         true
     }
 
@@ -1443,12 +1755,19 @@ impl Match {
                 self.ball.shot = false;
                 sfx.post();
                 self.show(if hits_post { "OFF THE POST!" } else { "OFF THE BAR!" }, 1.0);
+                if let Some(k) = self.ball.kicker {
+                    sfx.call(Call::Woodwork { player: self.players[k].name.clone() });
+                }
                 return;
             }
             let attacking_team = if self.dir(0) == side { 0 } else { 1 };
             let defending_team = 1 - attacking_team;
             if y < GOAL_HW && z < GOAL_H {
                 self.goal(attacking_team, sfx);
+                return;
+            }
+            if self.shootout.is_some() {
+                self.shootout_result(false, sfx);
                 return;
             }
             self.ball.owner = None;
@@ -1458,11 +1777,23 @@ impl Match {
                 self.begin_restart(Restart::Corner, attacking_team, spot, Some(sfx));
             } else {
                 let spot = vec2(side * (HALF_L - SIX_D), b.y.signum() * 4.0);
+                if self.ball.shot {
+                    if let Some(k) = self.ball.kicker {
+                        sfx.call(Call::Miss { player: self.players[k].name.clone() });
+                        if b.y.abs() < GOAL_HW + 3.0 {
+                            sfx.ooh();
+                        }
+                    }
+                }
                 self.begin_restart(Restart::GoalKick, defending_team, spot, Some(sfx));
             }
             return;
         }
         if b.y.abs() > HALF_W {
+            if self.shootout.is_some() {
+                self.shootout_result(false, sfx);
+                return;
+            }
             self.ball.owner = None;
             let spot = vec2(b.x.clamp(-HALF_L + 1.0, HALF_L - 1.0), b.y.signum() * HALF_W);
             self.begin_restart(Restart::ThrowIn, 1 - self.ball.touch_team, spot, Some(sfx));
@@ -1470,6 +1801,10 @@ impl Match {
     }
 
     fn goal(&mut self, team: usize, sfx: &Sfx) {
+        if self.shootout.is_some() {
+            self.shootout_result(true, sfx);
+            return;
+        }
         self.score[team] += 1;
         let scorer = match self.ball.kicker {
             Some(k) if self.players[k].team == team => self.players[k].name.clone(),
@@ -1486,7 +1821,13 @@ impl Match {
         self.phase = Phase::Goal { timer: 3.8 };
         self.show(format!("GOAL!  {}", scorer), 3.6);
         sfx.cheer();
+        let own_goal = scorer.ends_with("(OG)");
+        sfx.call(Call::Goal { scorer: scorer.trim_end_matches(" (OG)").to_string(), team, own_goal });
     }
+}
+
+fn default_shootout() -> Shootout {
+    Shootout::default()
 }
 
 impl Ball {
@@ -1533,7 +1874,7 @@ mod tests {
             let a = club("Home", 70 + seed as u8 * 3, formations[seed as usize % 6]);
             let b = club("Away", 85 - seed as u8 * 3, formations[(seed as usize + 2) % 6]);
             let teams = [TeamSetup::from_club(&a), TeamSetup::from_club(&b)];
-            let cfg = MatchConfig { mode: Mode::Watch, half_secs: 180.0, difficulty: 0.6 };
+            let cfg = MatchConfig { mode: Mode::Watch, half_secs: 180.0, difficulty: 0.6, knockout: true };
             let mut m = Match::new(cfg, teams);
             let sfx = Sfx::default();
             let mut was_setpiece = false;
@@ -1586,7 +1927,7 @@ mod tests {
                 m.teams[0].formation, m.score[0], m.score[1], m.teams[1].formation, m.shots,
                 m.possession[0] / (m.possession[0] + m.possession[1]) * 100.0
             );
-            println!("   loose {:.0}s", loose);
+            println!("   loose {:.0}s  cards {:?}  subs left {:?}  pens {:?}", loose, m.cards.len(), m.subs_left, m.shootout.as_ref().map(|s| (s.goals(0), s.goals(1), s.winner)));
             println!("   events {:?}  avg carrier x (team frame) {:.1} / {:.1}", banners, owner_x[0] / owner_n[0].max(1.0), owner_x[1] / owner_n[1].max(1.0));
             goals += m.score[0] + m.score[1];
             shots += m.shots[0] + m.shots[1];

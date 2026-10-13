@@ -4,7 +4,6 @@ use super::stadium::sim_to_world;
 use super::view::View;
 use super::AppState;
 use crate::sim::consts::*;
-use crate::sim::game::Match;
 use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
